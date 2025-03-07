@@ -4,7 +4,6 @@ pragma solidity ^0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IWethPlusPlus is IERC20 {
-
   /**
    * @dev Initializes the contract
    * @param weth_ The address of the WETH token

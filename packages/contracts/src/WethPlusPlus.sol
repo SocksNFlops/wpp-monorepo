@@ -5,7 +5,7 @@ import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IWethPlusPlus} from "./interface/IWethPlusPlus.sol";
 
-contract WethPlusPlus is ERC20Upgradeable, IWethPlusPlus{
+contract WethPlusPlus is ERC20Upgradeable, IWethPlusPlus {
   /**
    * @custom:storage-location erc7201:wethplusplus.storage.wethplusplus
    * @param _weth The address of the WETH token
@@ -40,7 +40,10 @@ contract WethPlusPlus is ERC20Upgradeable, IWethPlusPlus{
     __WethPlusPlus_init_unchained(weth_, stakedEth_, targetRatio_);
   }
 
-  function __WethPlusPlus_init_unchained(address weth_, address stakedEth_, uint16 targetRatio_) internal onlyInitializing {
+  function __WethPlusPlus_init_unchained(address weth_, address stakedEth_, uint16 targetRatio_)
+    internal
+    onlyInitializing
+  {
     WethPlusPlusStorage storage $ = _getWethPlusPlusStorage();
     $._weth = weth_;
     $._stakedEth = stakedEth_;
