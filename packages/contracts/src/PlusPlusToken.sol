@@ -10,6 +10,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 // ToDo: Handle decimals
 // ToDo: Whitelist of recipients
+// ToDo: Rewrite points to use shares rather than raw deposit amounts
 contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
   using SafeERC20 for IERC20;
 
