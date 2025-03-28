@@ -7,7 +7,7 @@ import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
-import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, toBeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -18,6 +18,7 @@ import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {SafeCast} from "v4-core/src/libraries/SafeCast.sol";
 
 contract PlusPlusPoolHook is BaseHook, IUnlockCallback {
   using PoolIdLibrary for PoolKey;
@@ -25,12 +26,11 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback {
   using BeforeSwapDeltaLibrary for BeforeSwapDelta;
   using StateLibrary for IPoolManager;
   using SafeERC20 for IERC20;
-
+  using BalanceDeltaLibrary for BalanceDelta;
+  using SafeCast for *;
   struct CallbackData {
     address to;
     PoolKey key;
-    uint256 amount0Expected;
-    uint256 amount1Expected;
     IPoolManager.ModifyLiquidityParams params;
   }
 
@@ -120,53 +120,41 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback {
   }
 
   function addLiquidity(PoolKey calldata key, IPoolManager.ModifyLiquidityParams calldata params) external {
-    // Fetch the current sqrtPriceX96 of the pool
-    (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
-
-    // Calculate the expected amount of tokens to be transferred
-    if (params.liquidityDelta > 0) {
-      (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
-        sqrtPriceX96,
-        TickMath.getSqrtPriceAtTick(params.tickLower),
-        TickMath.getSqrtPriceAtTick(params.tickUpper),
-        uint128(uint256(params.liquidityDelta))
-      );
-
-      console.log("Transfering from sender to the hook", msg.sender, address(this));
-
-      // Transfer the tokens to the pool
-      IERC20(Currency.unwrap(key.currency0)).safeTransferFrom(msg.sender, address(this), amount0Expected);
-      // IERC20(Currency.unwrap(key.currency0)).approve(address(poolManager), amount0Expected);
-      IERC20(Currency.unwrap(key.currency1)).safeTransferFrom(msg.sender, address(this), amount1Expected);
-      // IERC20(Currency.unwrap(key.currency1)).approve(address(poolManager), amount1Expected);
-
       poolManager.unlock(
-        abi.encode(CallbackData({to: msg.sender, key: key, amount0Expected: amount0Expected, amount1Expected: amount1Expected, params: params}))
+        abi.encode(CallbackData({to: msg.sender, key: key, params: params}))
       );
-    }
   }
 
   function unlockCallback(bytes calldata data) external returns (bytes memory) {
     CallbackData memory callbackData = abi.decode(data, (CallbackData));
     address to = callbackData.to;
     PoolKey memory key = callbackData.key;
-    uint256 amount0Expected = callbackData.amount0Expected;
-    uint256 amount1Expected = callbackData.amount1Expected;
     IPoolManager.ModifyLiquidityParams memory params = callbackData.params;
+    
 
-    console.log("amount0Expected", amount0Expected);
-    console.log("amount1Expected", amount1Expected);
+    (BalanceDelta callerDelta, BalanceDelta feesAccrued) = poolManager.modifyLiquidity(key, params, "");
 
-    key.currency0.settle(poolManager, address(this), amount0Expected, false);
+    int128 amount0 = callerDelta.amount0() + feesAccrued.amount0();
+    int128 amount1 = callerDelta.amount1() + feesAccrued.amount1();
 
-    console.log("Finished settling currency0");
+    if (amount0 < 0) {
+      uint256 amount0ToAdd = (-amount0).toUint128();
+      IERC20(Currency.unwrap(key.currency0)).safeTransferFrom(to, address(this), amount0ToAdd);
+      key.currency0.settle(poolManager, address(this), amount0ToAdd, false);
+    } else if (amount0 > 0) {
+      uint256 amount0ToRemove = amount0.toUint128();
+      key.currency0.take(poolManager, address(this), amount0ToRemove, false);
+      IERC20(Currency.unwrap(key.currency0)).safeTransfer(to, amount0ToRemove);
+    }
 
-    key.currency1.settle(poolManager, address(this), amount1Expected, false);
-
-    console.log("Finished settling currency1");
-
-    poolManager.modifyLiquidity(key, params, "");
-
-    console.log("Done with unlockCallback");
+    if (amount1 < 0) {
+      uint256 amount1ToAdd = (-amount1).toUint128();
+      IERC20(Currency.unwrap(key.currency1)).safeTransferFrom(to, address(this), amount1ToAdd);
+      key.currency1.settle(poolManager, address(this), amount1ToAdd, false);
+    } else if (amount1 > 0) {
+      uint256 amount1ToRemove = amount1.toUint128();
+      key.currency1.take(poolManager, address(this), amount1ToRemove, false);
+      IERC20(Currency.unwrap(key.currency1)).safeTransfer(to, amount1ToRemove);
+    }
   }
 }

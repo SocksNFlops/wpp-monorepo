@@ -277,16 +277,11 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     poolId = key.toId();
     manager.initialize(key, SQRT_PRICE_1_1);
 
-    // // Attempt to add liquidity to the pool
-    // tickLower = TickMath.minUsableTick(key.tickSpacing);
-    // tickUpper = TickMath.maxUsableTick(key.tickSpacing);
+    // Determine the ticks to be used for the liquidity
     tickLower = helper_boundInt24(
       tickLower, TickMath.minUsableTick(key.tickSpacing), TickMath.maxUsableTick(key.tickSpacing) - key.tickSpacing, key.tickSpacing
     );
     tickUpper = helper_boundInt24(tickUpper, tickLower + key.tickSpacing, TickMath.maxUsableTick(key.tickSpacing), key.tickSpacing);
-    // console.log("TEST: tickLower", tickLower);
-    // console.log("TEST: tickUpper", tickUpper);
-
 
     // liquidityAmount = uint128(bound(liquidityAmount, 1, type(uint128).max));
     liquidityAmount = 9e18;
@@ -294,9 +289,6 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
       SQRT_PRICE_1_1, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), liquidityAmount
     );
-
-    console.log("TEST: amount0Expected", amount0Expected);
-    console.log("TEST: amount1Expected", amount1Expected);
 
     if (tokenA < tokenB) {
       ERC20Mock(tokenA).mint(address(this), amount0Expected + 1);
@@ -307,8 +299,8 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     }
 
     // Approve the hook to take the tokens
-    IERC20(Currency.unwrap(key.currency0)).approve(address(hook), amount0Expected);
-    IERC20(Currency.unwrap(key.currency1)).approve(address(hook), amount1Expected);
+    IERC20(Currency.unwrap(key.currency0)).approve(address(hook), amount0Expected + 1);
+    IERC20(Currency.unwrap(key.currency1)).approve(address(hook), amount1Expected + 1);
 
     hook.addLiquidity(
       key,
@@ -319,5 +311,17 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
         salt: bytes32(0)
       })
     );
+
+    (uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128) = manager.getPositionInfo(poolId, address(this), tickLower, tickUpper, "");
+    console.log("TEST: liquidity", liquidity);
+    console.log("TEST: feeGrowthInside0LastX128", feeGrowthInside0LastX128);
+    console.log("TEST: feeGrowthInside1LastX128", feeGrowthInside1LastX128);
+
+    console.log("Now checking the hook's position info");
+    (liquidity, feeGrowthInside0LastX128, feeGrowthInside1LastX128) = manager.getPositionInfo(poolId, address(hook), tickLower, tickUpper, "");
+    console.log("TEST: liquidity", liquidity);
+    console.log("TEST: feeGrowthInside0LastX128", feeGrowthInside0LastX128);
+    console.log("TEST: feeGrowthInside1LastX128", feeGrowthInside1LastX128);
+    assertTrue(false);
   }
 }
