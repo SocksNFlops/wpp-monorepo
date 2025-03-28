@@ -48,7 +48,7 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
       afterInitialize: false,
       beforeAddLiquidity: true, // Need to disable adding liquidity in the standard way
       afterAddLiquidity: false,
-      beforeRemoveLiquidity: true, // Need to disable removing liquidity in the standard way
+      beforeRemoveLiquidity: false, // Don't need since hook owns all of the liquidity
       afterRemoveLiquidity: false,
       beforeSwap: false,
       afterSwap: false,
@@ -104,15 +104,6 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
     override
     returns (bytes4)
   {
-    revert UnsupportedLiquidityOperation();
-  }
-
-  function _beforeRemoveLiquidity(
-    address,
-    PoolKey calldata,
-    IPoolManager.ModifyLiquidityParams calldata,
-    bytes calldata
-  ) internal pure override returns (bytes4) {
     revert UnsupportedLiquidityOperation();
   }
 
