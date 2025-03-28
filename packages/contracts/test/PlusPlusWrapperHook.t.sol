@@ -55,7 +55,10 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
 
     // Deploy the hook to an address with the correct flags
     address flags = address(
-      uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG) ^ (0x4444 << 144) // Namespace the hook to avoid collisions
+      uint160(
+        Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG
+          | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+      ) ^ (0x4444 << 144) // Namespace the hook to avoid collisions
     );
 
     bytes memory constructorArgs = abi.encode(manager); //Add all the necessary constructor arguments from the hook
@@ -70,6 +73,27 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     // Approving
     IERC20(Currency.unwrap(currency0)).approve(address(minimalRouter), Constants.MAX_UINT256);
     IERC20(Currency.unwrap(currency1)).approve(address(minimalRouter), Constants.MAX_UINT256);
+  }
+
+  function helper_approveAllRoutersAndManagers() public {
+    address[11] memory toApprove = [
+      address(swapRouter),
+      address(swapRouterNoChecks),
+      address(modifyLiquidityRouter),
+      address(modifyLiquidityNoChecks),
+      address(donateRouter),
+      address(takeRouter),
+      address(claimsRouter),
+      address(nestedActionRouter.executor()),
+      address(actionsRouter),
+      address(manager),
+      address(minimalRouter)
+    ];
+
+    for (uint256 i = 0; i < toApprove.length; i++) {
+      IERC20(Currency.unwrap(currency0)).approve(toApprove[i], Constants.MAX_UINT256);
+      IERC20(Currency.unwrap(currency1)).approve(toApprove[i], Constants.MAX_UINT256);
+    }
   }
 
   function helper_makePlusPlusToken(address rawToken, address earnToken, uint16 targetRatio) public returns (address) {
@@ -112,12 +136,12 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     );
   }
 
-  function test_beforeInitialize_unsupportedTokenPair(address token0, address token1) public {
-    // Make sure that the tokens are in order and not the same
-    vm.assume(token0 < token1);
+  function test_beforeInitialize_unsupportedTokenPair(bytes32 saltA, bytes32 saltB) public {
+    address tokenA = address(new ERC20Mock{salt: saltA}());
+    address tokenB = address(new ERC20Mock{salt: saltB}());
     // Set currency0 to token0 and currency1 to token1
-    currency0 = Currency.wrap(token0);
-    currency1 = Currency.wrap(token1);
+    currency0 = tokenA < tokenB ? Currency.wrap(tokenA) : Currency.wrap(tokenB);
+    currency1 = tokenA < tokenB ? Currency.wrap(tokenB) : Currency.wrap(tokenA);
 
     // Attempt to create a pool with the wrong token pair
     key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
@@ -242,5 +266,153 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
       block.timestamp,
       ZERO_BYTES
     );
+  }
+
+  function test_swap_rawToPlusPlusExactIn(bytes32 salt, uint128 amountIn) public {
+    // Ensure amountIn is valid
+    amountIn = uint128(bound(amountIn, 1, type(uint128).max / 2));
+
+    // Creating a new raw token and plusplus token pair
+    address rawToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
+    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
+    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+
+    // Attempt to create a pool with the correct token pair
+    key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
+    poolId = key.toId();
+    manager.initialize(key, SQRT_PRICE_1_1);
+
+    // Deal tokens to the sender
+    helper_dealRawAndPlusPlus(rawToken, amountIn, address(this), plusPlusToken, 0, address(0));
+
+    // Approve routers and managers to take tokens
+    helper_approveAllRoutersAndManagers();
+
+    assertEq(IERC20(rawToken).balanceOf(address(this)), amountIn, "RawToken balance is not amountIn");
+    assertEq(IERC20(plusPlusToken).balanceOf(address(this)), 0, "PlusPlusToken balance is not 0");
+
+    uint256 expectedOutput = amountIn;
+
+    minimalRouter.swap(key, rawToken < plusPlusToken, amountIn, 0, ZERO_BYTES);
+
+    // Validate that swapper has correct balances
+    assertEq(IERC20(rawToken).balanceOf(address(this)), 0, "RawToken balance is not 0");
+    assertEq(
+      IERC20(plusPlusToken).balanceOf(address(this)), expectedOutput, "PlusPlusToken balance is not expectedOutput"
+    );
+
+    // Validate hook has no balances
+    assertEq(IERC20(rawToken).balanceOf(address(hook)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(plusPlusToken).balanceOf(address(hook)), 0, "PlusPlusToken balance is not 0");
+  }
+
+  function test_swap_rawToPlusPlusExactOut(bytes32 salt, uint128 amountOut) public {
+    // Ensure amountOut is valid
+    amountOut = uint128(bound(amountOut, 1, type(uint128).max / 2));
+    uint256 amountIn = amountOut;
+
+    // Creating a new raw token and plusplus token pair
+    address rawToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
+    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
+    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+
+    // Attempt to create a pool with the correct token pair
+    key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
+    poolId = key.toId();
+    manager.initialize(key, SQRT_PRICE_1_1);
+
+    // Deal tokens to the sender
+    helper_dealRawAndPlusPlus(rawToken, amountIn, address(this), plusPlusToken, 0, address(0));
+
+    // Approve pool manager to take rawToken
+    helper_approveAllRoutersAndManagers();
+
+    assertEq(IERC20(rawToken).balanceOf(address(this)), amountIn, "RawToken balance is not amountIn");
+    assertEq(IERC20(plusPlusToken).balanceOf(address(this)), 0, "PlusPlusToken balance is not 0");
+
+    minimalRouter.swap(key, rawToken < plusPlusToken, amountIn, amountOut, ZERO_BYTES);
+
+    // Validate that swapper has correct balances
+    assertEq(IERC20(rawToken).balanceOf(address(this)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(plusPlusToken).balanceOf(address(this)), amountOut, "PlusPlusToken balance is not amountOut");
+
+    // Validate hook has no balances
+    assertEq(IERC20(rawToken).balanceOf(address(hook)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(plusPlusToken).balanceOf(address(hook)), 0, "PlusPlusToken balance is not 0");
+  }
+
+  function test_swap_plusPlusToRawExactIn(bytes32 salt, uint128 amountIn) public {
+    // Ensure amountIn is valid
+    amountIn = uint128(bound(amountIn, 1, type(uint128).max / 2));
+
+    // Creating a new raw token and plusplus token pair
+    address rawToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
+    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
+    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+
+    // Attempt to create a pool with the correct token pair
+    key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
+    poolId = key.toId();
+    manager.initialize(key, SQRT_PRICE_1_1);
+
+    // Deal tokens to the sender
+    helper_dealRawAndPlusPlus(rawToken, 0, address(0), plusPlusToken, amountIn, address(this));
+
+    // Approve routers and managers to take tokens
+    helper_approveAllRoutersAndManagers();
+
+    assertEq(IERC20(plusPlusToken).balanceOf(address(this)), amountIn, "PlusPlusToken balance is not amountIn");
+    assertEq(IERC20(rawToken).balanceOf(address(this)), 0, "RawToken balance is not 0");
+
+    uint256 expectedOutput = amountIn;
+
+    minimalRouter.swap(key, rawToken > plusPlusToken, amountIn, 0, ZERO_BYTES);
+
+    // Validate that swapper has correct balances
+    assertEq(IERC20(plusPlusToken).balanceOf(address(this)), 0, "PlusPlusToken balance is not 0");
+    assertEq(IERC20(rawToken).balanceOf(address(this)), expectedOutput, "RawToken balance is not expectedOutput");
+
+    // Validate hook has no balances
+    assertEq(IERC20(rawToken).balanceOf(address(hook)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(plusPlusToken).balanceOf(address(hook)), 0, "PlusPlusToken balance is not 0");
+  }
+
+  function test_swap_plusPlusToRawExactOut(bytes32 salt, uint128 amountOut) public {
+    // Ensure amountOut is valid
+    amountOut = uint128(bound(amountOut, 1, type(uint128).max / 2));
+    uint256 amountIn = amountOut;
+
+    // Creating a new raw token and plusplus token pair
+    address rawToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
+    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
+    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+
+    // Attempt to create a pool with the correct token pair
+    key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
+    poolId = key.toId();
+    manager.initialize(key, SQRT_PRICE_1_1);
+
+    // Deal tokens to the sender
+    helper_dealRawAndPlusPlus(rawToken, 0, address(0), plusPlusToken, amountIn, address(this));
+
+    // Approve routers and managers to take tokens
+    helper_approveAllRoutersAndManagers();
+
+    assertEq(IERC20(plusPlusToken).balanceOf(address(this)), amountIn, "PlusPlusToken balance is not amountIn");
+    assertEq(IERC20(rawToken).balanceOf(address(this)), 0, "RawToken balance is not 0");
+
+    minimalRouter.swap(key, rawToken > plusPlusToken, amountIn, amountOut, ZERO_BYTES);
+
+    // Validate that swapper has correct balances
+    assertEq(IERC20(rawToken).balanceOf(address(this)), amountOut, "RawToken balance is not amountOut");
+    assertEq(IERC20(plusPlusToken).balanceOf(address(this)), 0, "PlusPlusToken balance is not 0");
+
+    // Validate hook has no balances
+    assertEq(IERC20(rawToken).balanceOf(address(hook)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(plusPlusToken).balanceOf(address(hook)), 0, "PlusPlusToken balance is not 0");
   }
 }

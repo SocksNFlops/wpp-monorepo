@@ -9,6 +9,7 @@ import {IPlusPlusToken} from "./interface/IPlusPlusToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 // ToDo: Handle decimals
+// ToDo: Whitelist of recipients
 contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
   using SafeERC20 for IERC20;
 
@@ -116,10 +117,10 @@ contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
     // Fetch storage
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
     // Get the last total stake
-    TokenStake storage lastTotalStake = $._lastTotalStake;
+    TokenStake storage _lastTotalStake = $._lastTotalStake;
     // Update total points and last timestamp
-    $._lastTotalStake.accruedPoints += (uint256(block.timestamp) - lastTotalStake.timestamp) * totalSupply();
-    $._lastTotalStake.timestamp = uint128(block.timestamp);
+    _lastTotalStake.accruedPoints += (uint256(block.timestamp) - _lastTotalStake.timestamp) * totalSupply();
+    _lastTotalStake.timestamp = uint128(block.timestamp);
   }
 
   /**
