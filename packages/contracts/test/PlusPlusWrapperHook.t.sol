@@ -43,6 +43,8 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
   PoolId poolId;
 
   uint256 tokenId;
+  int24 tickLower;
+  int24 tickUpper;
 
   function setUp() public {
     // creates the pool manager, utility routers, and test tokens
@@ -53,7 +55,7 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
 
     // Deploy the hook to an address with the correct flags
     address flags = address(
-      uint160(Hooks.BEFORE_INITIALIZE_FLAG) ^ (0x4444 << 144) // Namespace the hook to avoid collisions
+      uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG) ^ (0x4444 << 144) // Namespace the hook to avoid collisions
     );
 
     bytes memory constructorArgs = abi.encode(manager); //Add all the necessary constructor arguments from the hook
@@ -74,6 +76,40 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     PlusPlusToken token = new PlusPlusToken();
     token.initialize(rawToken, earnToken, targetRatio);
     return address(token);
+  }
+
+  function helper_dealRawAndPlusPlus(
+    address rawToken,
+    uint256 rawAmount,
+    address rawRecipient,
+    address plusPlusToken,
+    uint256 plusPlusAmount,
+    address plusPlusRecipient
+  ) internal {
+    if (rawAmount > 0) {
+      ERC20Mock(rawToken).mint(rawRecipient, rawAmount);
+    }
+    if (plusPlusAmount > 0) {
+      ERC20Mock(rawToken).mint(address(this), plusPlusAmount);
+      ERC20Mock(rawToken).approve(address(plusPlusToken), plusPlusAmount);
+      PlusPlusToken(plusPlusToken).deposit(plusPlusRecipient, plusPlusAmount);
+    }
+  }
+
+  function helper_addLiquidity(
+    PoolKey memory _poolKey,
+    int24 _tickLower,
+    int24 _tickUpper,
+    uint256 _liquidity,
+    uint256 _amount0Max,
+    uint256 _amount1Max,
+    address _recipient,
+    uint256 _deadline,
+    bytes memory _hookData
+  ) external returns (uint256, BalanceDelta) {
+    return posm.mint(
+      _poolKey, _tickLower, _tickUpper, _liquidity, _amount0Max, _amount1Max, _recipient, _deadline, _hookData
+    );
   }
 
   function test_beforeInitialize_unsupportedTokenPair(address token0, address token1) public {
@@ -137,6 +173,7 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
   }
 
   function test_beforeInitialize_correctCurrencyPair(bytes32 salt) public {
+    // Creating a new raw token and plusplus token pair
     address rawToken = address(new ERC20Mock{salt: salt}());
     address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
     currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
@@ -150,5 +187,60 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     // Assert that the pool was created successfully
     (uint160 sqrtPriceX96,,,) = manager.getSlot0(poolId);
     assertEq(sqrtPriceX96, SQRT_PRICE_1_1, "Pool was not created successfully");
+  }
+
+  function test_beforeAddLiquidity_revert(bytes32 salt, uint128 liquidityAmount) public {
+    // Creating a new raw token and plusplus token pair
+    address rawToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
+    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
+    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+
+    // Attempt to create a pool with the correct token pair
+    key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
+    poolId = key.toId();
+    manager.initialize(key, SQRT_PRICE_1_1);
+
+    // // Attempt to add liquidity to the pool
+    tickLower = TickMath.minUsableTick(key.tickSpacing);
+    tickUpper = TickMath.maxUsableTick(key.tickSpacing);
+
+    liquidityAmount = uint128(bound(liquidityAmount, 1, type(uint128).max));
+
+    (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
+      SQRT_PRICE_1_1, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), liquidityAmount
+    );
+
+    if (rawToken < plusPlusToken) {
+      helper_dealRawAndPlusPlus(
+        rawToken, amount0Expected + 1, address(this), plusPlusToken, amount1Expected + 1, address(this)
+      );
+    } else {
+      helper_dealRawAndPlusPlus(
+        rawToken, amount1Expected + 1, address(this), plusPlusToken, amount0Expected + 1, address(this)
+      );
+    }
+
+    // Attempt to add liquidity to the pool (forcibly using an external call to the hook so that expectRevert catches it)
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        CustomRevert.WrappedError.selector,
+        address(hook),
+        IHooks.beforeAddLiquidity.selector,
+        abi.encodeWithSelector(PlusPlusWrapperHook.UnsupportedLiquidityOperation.selector),
+        abi.encodeWithSelector(Hooks.HookCallFailed.selector)
+      )
+    );
+    this.helper_addLiquidity(
+      key,
+      tickLower,
+      tickUpper,
+      liquidityAmount,
+      amount0Expected + 1,
+      amount1Expected + 1,
+      address(this),
+      block.timestamp,
+      ZERO_BYTES
+    );
   }
 }

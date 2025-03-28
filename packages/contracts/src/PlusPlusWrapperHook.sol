@@ -24,6 +24,7 @@ contract PlusPlusWrapperHook is BaseHook {
   error UnsupportedFee();
   error UnsupportedTickSpacing();
   error UnsupportedTokenPair();
+  error UnsupportedLiquidityOperation();
 
   constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
 
@@ -31,7 +32,7 @@ contract PlusPlusWrapperHook is BaseHook {
     return Hooks.Permissions({
       beforeInitialize: true, // Need to disable invalid pairs from being created
       afterInitialize: false,
-      beforeAddLiquidity: false, // Need to disable adding liquidity
+      beforeAddLiquidity: true, // Need to disable adding liquidity
       afterAddLiquidity: false,
       beforeRemoveLiquidity: false,
       afterRemoveLiquidity: false,
@@ -76,5 +77,14 @@ contract PlusPlusWrapperHook is BaseHook {
     }
     // If neither token is a PlusPlusToken, revert
     revert UnsupportedTokenPair();
+  }
+
+  function _beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
+    internal
+    pure
+    override
+    returns (bytes4)
+  {
+    revert UnsupportedLiquidityOperation();
   }
 }
