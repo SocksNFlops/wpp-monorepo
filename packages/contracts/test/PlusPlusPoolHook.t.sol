@@ -25,26 +25,7 @@ import {PlusPlusPoolHook} from "../src/PlusPlusPoolHook.sol";
 import {MinimalRouter} from "./utils/MinimalRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PlusPlusToken} from "../src/PlusPlusToken.sol";
-import {ERC20Mock as BOB} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
-
-contract ERC20Mock is BOB {
-  constructor() BOB() {}
-
-  function transfer(address to, uint256 amount) public override returns (bool) {
-    console.log("\t\t\t\t\t\tRAW: transfer:", msg.sender, to, amount);
-    super.transfer(to, amount);
-    emit Transfer(msg.sender, to, amount);
-    return true;
-  }
-
-  function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
-    console.log("\t\t\t\t\t\tRAW: transferFrom:", from, to, amount);
-    super.transferFrom(from, to, amount);
-    emit Transfer(from, to, amount);
-    return true;
-  }
-
-}
+import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 
 contract PlusPlusPoolHookTest is Test, Fixtures {
   using EasyPosm for IPositionManager;
@@ -136,15 +117,16 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
   function helper_boundInt24(int24 value, int24 min, int24 max, int24 step) public returns (int24) {
     min /= step;
     max /= step;
-    return step * int24(
-      int256(
-        bound(
-          uint256(value + int256(uint256(type(uint24).max))),
-          uint256(min + int256(uint256(type(uint24).max))),
-          uint256(max + int256(uint256(type(uint24).max)))
-        )
-      ) - int256(uint256(type(uint24).max))
-    );
+    return step
+      * int24(
+        int256(
+          bound(
+            uint256(value + int256(uint256(type(uint24).max))),
+            uint256(min + int256(uint256(type(uint24).max))),
+            uint256(max + int256(uint256(type(uint24).max)))
+          )
+        ) - int256(uint256(type(uint24).max))
+      );
   }
 
   function test_beforeInitialize_unsupportedTokenPair(bytes32 saltA, bytes32 saltB) public {
@@ -261,7 +243,7 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     );
   }
 
-  function test_addLiquidity(bytes32 saltA, bytes32 saltB, uint128 liquidityAmount) public {
+  function test_modifyLiquidity_add(bytes32 saltA, bytes32 saltB, uint128 liquidityAmount) public {
     // Ensure that the salts are not the same
     vm.assume(saltA != saltB);
     // Create a regular token
@@ -279,9 +261,14 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
 
     // Determine the ticks to be used for the liquidity
     tickLower = helper_boundInt24(
-      tickLower, TickMath.minUsableTick(key.tickSpacing), TickMath.maxUsableTick(key.tickSpacing) - key.tickSpacing, key.tickSpacing
+      tickLower,
+      TickMath.minUsableTick(key.tickSpacing),
+      TickMath.maxUsableTick(key.tickSpacing) - key.tickSpacing,
+      key.tickSpacing
     );
-    tickUpper = helper_boundInt24(tickUpper, tickLower + key.tickSpacing, TickMath.maxUsableTick(key.tickSpacing), key.tickSpacing);
+    tickUpper = helper_boundInt24(
+      tickUpper, tickLower + key.tickSpacing, TickMath.maxUsableTick(key.tickSpacing), key.tickSpacing
+    );
 
     // liquidityAmount = uint128(bound(liquidityAmount, 1, type(uint128).max));
     liquidityAmount = 9e18;
@@ -302,7 +289,7 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     IERC20(Currency.unwrap(key.currency0)).approve(address(hook), amount0Expected + 1);
     IERC20(Currency.unwrap(key.currency1)).approve(address(hook), amount1Expected + 1);
 
-    hook.addLiquidity(
+    hook.modifyLiquidity(
       key,
       IPoolManager.ModifyLiquidityParams({
         tickLower: tickLower,
@@ -312,16 +299,19 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
       })
     );
 
-    (uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128) = manager.getPositionInfo(poolId, address(this), tickLower, tickUpper, "");
-    console.log("TEST: liquidity", liquidity);
-    console.log("TEST: feeGrowthInside0LastX128", feeGrowthInside0LastX128);
-    console.log("TEST: feeGrowthInside1LastX128", feeGrowthInside1LastX128);
+    // Confirm that the hook now owns the liquidity added to the pool manager
+    (uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128) =
+      manager.getPositionInfo(poolId, address(hook), tickLower, tickUpper, "");
+    assertEq(liquidity, liquidityAmount, "Hook should own the liquidityAmount added to the pool manager");
+    assertEq(feeGrowthInside0LastX128, 0, "Fee growth inside0 should be 0 since no swaps have occurred");
+    assertEq(feeGrowthInside1LastX128, 0, "Fee growth inside1 should be 0 since no swaps have occurred");
 
-    console.log("Now checking the hook's position info");
-    (liquidity, feeGrowthInside0LastX128, feeGrowthInside1LastX128) = manager.getPositionInfo(poolId, address(hook), tickLower, tickUpper, "");
-    console.log("TEST: liquidity", liquidity);
-    console.log("TEST: feeGrowthInside0LastX128", feeGrowthInside0LastX128);
-    console.log("TEST: feeGrowthInside1LastX128", feeGrowthInside1LastX128);
-    assertTrue(false);
+    // Confirm that we have minted the sender ERC6909 tokens for the liquidity added
+    uint256 tokenId = hook.generateTokenId(key, tickLower, tickUpper, "");
+    assertEq(
+      hook.balanceOf(address(this), tokenId),
+      liquidityAmount,
+      "Hook should have minted the sender ERC6909 tokens for the liquidity added"
+    );
   }
 }

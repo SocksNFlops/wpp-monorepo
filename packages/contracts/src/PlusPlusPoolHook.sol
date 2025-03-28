@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {console} from "forge-std/console.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
@@ -19,8 +18,9 @@ import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SafeCast} from "v4-core/src/libraries/SafeCast.sol";
+import {ERC6909} from "v4-core/src/ERC6909.sol";
 
-contract PlusPlusPoolHook is BaseHook, IUnlockCallback {
+contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
   using PoolIdLibrary for PoolKey;
   using CurrencySettler for Currency;
   using BeforeSwapDeltaLibrary for BeforeSwapDelta;
@@ -28,6 +28,7 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback {
   using SafeERC20 for IERC20;
   using BalanceDeltaLibrary for BalanceDelta;
   using SafeCast for *;
+
   struct CallbackData {
     address to;
     PoolKey key;
@@ -119,10 +120,8 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback {
     revert UnsupportedLiquidityOperation();
   }
 
-  function addLiquidity(PoolKey calldata key, IPoolManager.ModifyLiquidityParams calldata params) external {
-      poolManager.unlock(
-        abi.encode(CallbackData({to: msg.sender, key: key, params: params}))
-      );
+  function modifyLiquidity(PoolKey calldata key, IPoolManager.ModifyLiquidityParams calldata params) external {
+    poolManager.unlock(abi.encode(CallbackData({to: msg.sender, key: key, params: params})));
   }
 
   function unlockCallback(bytes calldata data) external returns (bytes memory) {
@@ -130,13 +129,13 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback {
     address to = callbackData.to;
     PoolKey memory key = callbackData.key;
     IPoolManager.ModifyLiquidityParams memory params = callbackData.params;
-    
 
     (BalanceDelta callerDelta, BalanceDelta feesAccrued) = poolManager.modifyLiquidity(key, params, "");
 
     int128 amount0 = callerDelta.amount0() + feesAccrued.amount0();
     int128 amount1 = callerDelta.amount1() + feesAccrued.amount1();
 
+    // Settle or take currency0
     if (amount0 < 0) {
       uint256 amount0ToAdd = (-amount0).toUint128();
       IERC20(Currency.unwrap(key.currency0)).safeTransferFrom(to, address(this), amount0ToAdd);
@@ -147,6 +146,7 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback {
       IERC20(Currency.unwrap(key.currency0)).safeTransfer(to, amount0ToRemove);
     }
 
+    // Settle or take currency1
     if (amount1 < 0) {
       uint256 amount1ToAdd = (-amount1).toUint128();
       IERC20(Currency.unwrap(key.currency1)).safeTransferFrom(to, address(this), amount1ToAdd);
@@ -156,5 +156,22 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback {
       key.currency1.take(poolManager, address(this), amount1ToRemove, false);
       IERC20(Currency.unwrap(key.currency1)).safeTransfer(to, amount1ToRemove);
     }
+
+    // Mint/Burn an ERC6909 liquidity claim to the caller
+    uint256 tokenId = generateTokenId(key, params.tickLower, params.tickUpper, "");
+    if (params.liquidityDelta > 0) {
+      _mint(to, tokenId, uint256(params.liquidityDelta));
+    } else {
+      _burn(to, tokenId, uint256(-params.liquidityDelta));
+    }
+  }
+
+  function generateTokenId(PoolKey memory key, int24 tickLower, int24 tickUpper, bytes32 salt)
+    public
+    pure
+    returns (uint256)
+  {
+    return
+      uint256(keccak256(abi.encode(key.currency0, key.currency1, key.fee, key.tickSpacing, tickLower, tickUpper, salt)));
   }
 }

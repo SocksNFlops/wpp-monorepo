@@ -189,18 +189,4 @@ contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
     // Calculate total points
     return $._lastTotalStake.accruedPoints + (uint256(block.timestamp) - $._lastTotalStake.timestamp) * totalSupply();
   }
-
-  function transfer(address to, uint256 amount) public override(ERC20Upgradeable, IERC20) returns (bool) {
-    console.log("\t\t\t\t\t\tPLUSPLUS: transfer:", msg.sender, to, amount);
-    super.transfer(to, amount);
-    emit Transfer(msg.sender, to, amount);
-    return true;
-  }
-
-  function transferFrom(address from, address to, uint256 amount) public override(ERC20Upgradeable, IERC20) returns (bool) {
-    console.log("\t\t\t\t\t\tPLUSPLUS: transferFrom:", from, to, amount);
-    super.transferFrom(from, to, amount);
-    emit Transfer(from, to, amount);
-    return true;
-  }
 }
