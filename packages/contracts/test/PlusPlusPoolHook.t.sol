@@ -243,7 +243,7 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     );
   }
 
-  function test_modifyLiquidity_add(bytes32 saltA, bytes32 saltB, uint128 liquidityAmount) public {
+  function test_modifyLiquidity_add(bytes32 saltA, bytes32 saltB, uint64 liquidityAmount) public {
     // Ensure that the salts are not the same
     vm.assume(saltA != saltB);
     // Create a regular token
@@ -270,24 +270,25 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
       tickUpper, tickLower + key.tickSpacing, TickMath.maxUsableTick(key.tickSpacing), key.tickSpacing
     );
 
-    // liquidityAmount = uint128(bound(liquidityAmount, 1, type(uint128).max));
-    liquidityAmount = 9e18;
+    // Ensure that the liquidity amount is not too large
+    liquidityAmount = uint64(bound(liquidityAmount, 1, type(uint64).max));
 
     (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
       SQRT_PRICE_1_1, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), liquidityAmount
     );
 
+    // Mint and approve the tokens. Only mint and approve the rawTokens however, as the hook will wrap them into the PlusPlusToken
     if (tokenA < tokenB) {
       ERC20Mock(tokenA).mint(address(this), amount0Expected + 1);
-      helper_dealRawAndPlusPlus(rawToken, 0, address(0), tokenB, amount1Expected + 1, address(this));
+      IERC20(tokenA).approve(address(hook), amount0Expected + 1);
+      helper_dealRawAndPlusPlus(rawToken, amount1Expected + 1, address(this), tokenB, 0, address(0));
+      IERC20(rawToken).approve(address(hook), amount1Expected + 1);
     } else {
       ERC20Mock(tokenA).mint(address(this), amount1Expected + 1);
-      helper_dealRawAndPlusPlus(rawToken, 0, address(0), tokenB, amount0Expected + 1, address(this));
+      IERC20(tokenA).approve(address(hook), amount1Expected + 1);
+      helper_dealRawAndPlusPlus(rawToken, amount0Expected + 1, address(this), tokenB, 0, address(0));
+      IERC20(rawToken).approve(address(hook), amount0Expected + 1);
     }
-
-    // Approve the hook to take the tokens
-    IERC20(Currency.unwrap(key.currency0)).approve(address(hook), amount0Expected + 1);
-    IERC20(Currency.unwrap(key.currency1)).approve(address(hook), amount1Expected + 1);
 
     hook.modifyLiquidity(
       key,
@@ -307,7 +308,7 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     assertEq(feeGrowthInside1LastX128, 0, "Fee growth inside1 should be 0 since no swaps have occurred");
 
     // Confirm that we have minted the sender ERC6909 tokens for the liquidity added
-    uint256 tokenId = hook.generateTokenId(key, tickLower, tickUpper, "");
+    tokenId = hook.generateTokenId(key, tickLower, tickUpper, "");
     assertEq(
       hook.balanceOf(address(this), tokenId),
       liquidityAmount,
