@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.24;
 
-import {console} from "forge-std/console.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IPlusPlus} from "./interface/IPlusPlus.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {IPlusPlusToken} from "./interface/IPlusPlusToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract PlusPlusToken is ERC20Upgradeable, IPlusPlus {
+// ToDo: Handle decimals
+contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
   using SafeERC20 for IERC20;
 
   /**
@@ -46,7 +48,10 @@ contract PlusPlusToken is ERC20Upgradeable, IPlusPlus {
     internal
     onlyInitializing
   {
-    __ERC20_init("PlusPlusToken", "PP");
+    string memory name = string.concat(IERC20Metadata(rawToken_).name(), " - PlusPlus");
+    string memory symbol = string.concat(IERC20Metadata(rawToken_).symbol(), "++");
+    __ERC20_init(name, symbol);
+    __EIP712_init("PlusPlusToken", "1");
     __PlusPlusToken_init_unchained(rawToken_, earningToken_, targetRatio_);
   }
 
@@ -61,41 +66,39 @@ contract PlusPlusToken is ERC20Upgradeable, IPlusPlus {
   }
 
   /**
-   * @inheritdoc IPlusPlus
+   * @inheritdoc IPlusPlusToken
    */
   function initialize(address rawToken_, address earningToken_, uint16 targetRatio_) public initializer {
     __PlusPlusToken_init(rawToken_, earningToken_, targetRatio_);
   }
 
   /**
-   * @inheritdoc IPlusPlus
+   * @inheritdoc IPlusPlusToken
    */
   function rawToken() external view returns (address) {
     return _getPlusPlusTokenStorage()._rawToken;
   }
 
   /**
-   * @inheritdoc IPlusPlus
+   * @inheritdoc IPlusPlusToken
    */
   function earningToken() external view returns (address) {
     return _getPlusPlusTokenStorage()._earningToken;
   }
 
   /**
-   * @inheritdoc IPlusPlus
+   * @inheritdoc IPlusPlusToken
    */
   function targetRatio() external view returns (uint16) {
     return _getPlusPlusTokenStorage()._targetRatio;
   }
 
   /**
-   * @inheritdoc IPlusPlus
-   */ 
+   * @inheritdoc IPlusPlusToken
+   */
   function lastTotalStake() external view returns (TokenStake memory) {
     return _getPlusPlusTokenStorage()._lastTotalStake;
   }
-
-  
 
   function _convertPoints(address account) internal {
     // Fetch storage
@@ -120,12 +123,12 @@ contract PlusPlusToken is ERC20Upgradeable, IPlusPlus {
   }
 
   /**
-   * @inheritdoc IPlusPlus
+   * @inheritdoc IPlusPlusToken
    */
   function deposit(address account, uint256 rawAmount) external returns (uint256 amount) {
     // Fetch storage
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
-    
+
     // Update existing token stake
     _convertPoints(account);
 
@@ -143,7 +146,7 @@ contract PlusPlusToken is ERC20Upgradeable, IPlusPlus {
   }
 
   /**
-   * @inheritdoc IPlusPlus
+   * @inheritdoc IPlusPlusToken
    */
   function withdraw(address account, uint256 rawAmount) external returns (uint256 amount) {
     // Fetch storage
@@ -172,16 +175,6 @@ contract PlusPlusToken is ERC20Upgradeable, IPlusPlus {
     // Get the token stake
     TokenStake storage tokenStake = $._tokenStakes[account];
 
-    console.log("tokenStake.accruedPoints", tokenStake.accruedPoints);
-    console.log("tokenStake.timestamp", tokenStake.timestamp);
-    console.log("balanceOf(account)", balanceOf(account));
-    console.log("block.timestamp", block.timestamp);
-    console.log("--------------------------------");
-    console.log("(uint256(block.timestamp) - tokenStake.timestamp)", (uint256(block.timestamp) - tokenStake.timestamp));
-    console.log("(uint256(block.timestamp) - tokenStake.timestamp) * balanceOf(account)", (uint256(block.timestamp) - tokenStake.timestamp) * balanceOf(account));
-    console.log("tokenStake.accruedPoints + (uint256(block.timestamp) - tokenStake.timestamp) * balanceOf(account)", tokenStake.accruedPoints + (uint256(block.timestamp) - tokenStake.timestamp) * balanceOf(account));
-    console.log("--------------------------------");
-
     // Calculate pending points
     pendingPoints = tokenStake.accruedPoints + (uint256(block.timestamp) - tokenStake.timestamp) * balanceOf(account);
   }
@@ -189,7 +182,7 @@ contract PlusPlusToken is ERC20Upgradeable, IPlusPlus {
   function totalPoints() public view returns (uint256) {
     // Fetch storage
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
-    
+
     // Calculate total points
     return $._lastTotalStake.accruedPoints + (uint256(block.timestamp) - $._lastTotalStake.timestamp) * totalSupply();
   }

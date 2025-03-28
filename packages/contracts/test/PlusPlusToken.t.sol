@@ -6,13 +6,11 @@ import {PlusPlusToken} from "../src/PlusPlusToken.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-
 contract PlusPlusTokenTest is Test {
   PlusPlusToken public plusplusToken;
   IERC20 public rawToken;
   IERC20 public earningToken;
   uint16 public targetRatio = 5_000;
-
 
   function setUp() public {
     // Set up raw and earning tokens
@@ -104,13 +102,19 @@ contract PlusPlusTokenTest is Test {
     plusplusToken.withdraw(account, withdrawAmount);
 
     // Validate the balance of the account and total supply
-    assertEq(plusplusToken.balanceOf(account), depositAmount - withdrawAmount, "Balance of account should be the deposit amount minus the withdraw amount");
-    assertEq(plusplusToken.totalSupply(), depositAmount - withdrawAmount, "Total supply should be the deposit amount minus the withdraw amount");
+    assertEq(
+      plusplusToken.balanceOf(account),
+      depositAmount - withdrawAmount,
+      "Balance of account should be the deposit amount minus the withdraw amount"
+    );
+    assertEq(
+      plusplusToken.totalSupply(),
+      depositAmount - withdrawAmount,
+      "Total supply should be the deposit amount minus the withdraw amount"
+    );
 
     // Validate that the points are correct
     assertEq(plusplusToken.points(account), uint256(timeElapsed) * (depositAmount), "Points of account are not correct");
     assertEq(plusplusToken.totalPoints(), uint256(timeElapsed) * (depositAmount), "Total points are not correct");
   }
-
-
 }

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-interface IPlusPlus is IERC20 {
-
+interface IPlusPlusToken is IERC20 {
   /**
    * @notice The token stake for a given account
    * @param accruedPoints The amount of accrued points
