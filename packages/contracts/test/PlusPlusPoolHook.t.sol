@@ -25,7 +25,26 @@ import {PlusPlusPoolHook} from "../src/PlusPlusPoolHook.sol";
 import {MinimalRouter} from "./utils/MinimalRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PlusPlusToken} from "../src/PlusPlusToken.sol";
-import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {ERC20Mock as BOB} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+
+contract ERC20Mock is BOB {
+  constructor() BOB() {}
+
+  function transfer(address to, uint256 amount) public override returns (bool) {
+    console.log("\t\t\t\t\t\tRAW: transfer:", msg.sender, to, amount);
+    super.transfer(to, amount);
+    emit Transfer(msg.sender, to, amount);
+    return true;
+  }
+
+  function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
+    console.log("\t\t\t\t\t\tRAW: transferFrom:", from, to, amount);
+    super.transferFrom(from, to, amount);
+    emit Transfer(from, to, amount);
+    return true;
+  }
+
+}
 
 contract PlusPlusPoolHookTest is Test, Fixtures {
   using EasyPosm for IPositionManager;
@@ -35,8 +54,8 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
   using CustomRevert for bytes4;
   using BalanceDeltaLibrary for BalanceDelta;
 
-  uint24 constant FEE = 0;
-  int24 constant TICK_SPACING = 1;
+  uint24 constant FEE = 3000;
+  int24 constant TICK_SPACING = 60;
 
   MinimalRouter minimalRouter;
   PlusPlusPoolHook hook;
@@ -54,7 +73,8 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
 
     // Deploy the hook to an address with the correct flags
     address flags = address(
-      uint160(Hooks.BEFORE_INITIALIZE_FLAG) ^ (0x4444 << 144) // Namespace the hook to avoid collisions
+      uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG)
+        ^ (0x4444 << 144) // Namespace the hook to avoid collisions
     );
 
     bytes memory constructorArgs = abi.encode(manager); //Add all the necessary constructor arguments from the hook
@@ -66,6 +86,24 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     PlusPlusToken token = new PlusPlusToken();
     token.initialize(rawToken, earnToken, targetRatio);
     return address(token);
+  }
+
+  function helper_dealRawAndPlusPlus(
+    address rawToken,
+    uint256 rawAmount,
+    address rawRecipient,
+    address plusPlusToken,
+    uint256 plusPlusAmount,
+    address plusPlusRecipient
+  ) internal {
+    if (rawAmount > 0) {
+      ERC20Mock(rawToken).mint(rawRecipient, rawAmount);
+    }
+    if (plusPlusAmount > 0) {
+      ERC20Mock(rawToken).mint(address(this), plusPlusAmount);
+      ERC20Mock(rawToken).approve(address(plusPlusToken), plusPlusAmount);
+      PlusPlusToken(plusPlusToken).deposit(plusPlusRecipient, plusPlusAmount);
+    }
   }
 
   function helper_addLiquidity(
@@ -84,7 +122,34 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     );
   }
 
+  function helper_removeLiquidity(
+    uint256 _tokenId,
+    uint256 _amount0Min,
+    uint256 _amount1Min,
+    address _recipient,
+    uint256 _deadline,
+    bytes memory _hookData
+  ) external returns (BalanceDelta delta) {
+    return posm.burn(_tokenId, _amount0Min, _amount1Min, _recipient, _deadline, _hookData);
+  }
+
+  function helper_boundInt24(int24 value, int24 min, int24 max, int24 step) public returns (int24) {
+    min /= step;
+    max /= step;
+    return step * int24(
+      int256(
+        bound(
+          uint256(value + int256(uint256(type(uint24).max))),
+          uint256(min + int256(uint256(type(uint24).max))),
+          uint256(max + int256(uint256(type(uint24).max)))
+        )
+      ) - int256(uint256(type(uint24).max))
+    );
+  }
+
   function test_beforeInitialize_unsupportedTokenPair(bytes32 saltA, bytes32 saltB) public {
+    // Ensure that the salts are not the same
+    vm.assume(saltA != saltB);
     address tokenA = address(new ERC20Mock{salt: saltA}());
     address tokenB = address(new ERC20Mock{salt: saltB}());
     // Set currency0 to token0 and currency1 to token1
@@ -139,58 +204,120 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     assertEq(sqrtPriceX96, SQRT_PRICE_1_1, "Pool was not created successfully");
   }
 
-  // function test_beforeAddLiquidity_revert(bytes32 salt, uint128 liquidityAmount) public {
-  //   // Creating a new raw token and plusplus token pair
-  //   address rawToken = address(new ERC20Mock{salt: salt}());
-  //   address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
-  //   currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
-  //   currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+  function test_beforeAddLiquidity_revert(bytes32 saltA, bytes32 saltB, uint128 liquidityAmount) public {
+    // Ensure that the salts are not the same
+    vm.assume(saltA != saltB);
+    // Create a regular token
+    address tokenA = address(new ERC20Mock{salt: saltA}());
+    // Creating a plusplus token pair
+    address rawToken = address(new ERC20Mock{salt: saltB}());
+    address tokenB = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
+    currency0 = tokenA < tokenB ? Currency.wrap(tokenA) : Currency.wrap(tokenB);
+    currency1 = tokenA < tokenB ? Currency.wrap(tokenB) : Currency.wrap(tokenA);
 
-  //   // Attempt to create a pool with the correct token pair
-  //   key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
-  //   poolId = key.toId();
-  //   manager.initialize(key, SQRT_PRICE_1_1);
+    // Attempt to create a pool with the correct token pair
+    key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
+    poolId = key.toId();
+    manager.initialize(key, SQRT_PRICE_1_1);
 
-  //   // // Attempt to add liquidity to the pool
-  //   tickLower = TickMath.minUsableTick(key.tickSpacing);
-  //   tickUpper = TickMath.maxUsableTick(key.tickSpacing);
+    // // Attempt to add liquidity to the pool
+    tickLower = TickMath.minUsableTick(key.tickSpacing);
+    tickUpper = TickMath.maxUsableTick(key.tickSpacing);
 
-  //   liquidityAmount = uint128(bound(liquidityAmount, 1, type(uint128).max));
+    liquidityAmount = uint128(bound(liquidityAmount, 1, type(uint128).max));
 
-  //   (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
-  //     SQRT_PRICE_1_1, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), liquidityAmount
-  //   );
+    (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
+      SQRT_PRICE_1_1, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), liquidityAmount
+    );
 
-  //   if (rawToken < plusPlusToken) {
-  //     helper_dealRawAndPlusPlus(
-  //       rawToken, amount0Expected + 1, address(this), plusPlusToken, amount1Expected + 1, address(this)
-  //     );
-  //   } else {
-  //     helper_dealRawAndPlusPlus(
-  //       rawToken, amount1Expected + 1, address(this), plusPlusToken, amount0Expected + 1, address(this)
-  //     );
-  //   }
+    if (tokenA < tokenB) {
+      ERC20Mock(tokenA).mint(address(this), amount0Expected + 1);
+      helper_dealRawAndPlusPlus(rawToken, 0, address(0), tokenB, amount1Expected + 1, address(this));
+    } else {
+      ERC20Mock(tokenA).mint(address(this), amount1Expected + 1);
+      helper_dealRawAndPlusPlus(rawToken, 0, address(0), tokenB, amount0Expected + 1, address(this));
+    }
 
-  //   // Attempt to add liquidity to the pool (forcibly using an external call to the hook so that expectRevert catches it)
-  //   vm.expectRevert(
-  //     abi.encodeWithSelector(
-  //       CustomRevert.WrappedError.selector,
-  //       address(hook),
-  //       IHooks.beforeAddLiquidity.selector,
-  //       abi.encodeWithSelector(PlusPlusWrapperHook.UnsupportedLiquidityOperation.selector),
-  //       abi.encodeWithSelector(Hooks.HookCallFailed.selector)
-  //     )
-  //   );
-  //   this.helper_addLiquidity(
-  //     key,
-  //     tickLower,
-  //     tickUpper,
-  //     liquidityAmount,
-  //     amount0Expected + 1,
-  //     amount1Expected + 1,
-  //     address(this),
-  //     block.timestamp,
-  //     ZERO_BYTES
-  //   );
-  // }
+    // Attempt to add liquidity to the pool (forcibly using an external call to the hook so that expectRevert catches it)
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        CustomRevert.WrappedError.selector,
+        address(hook),
+        IHooks.beforeAddLiquidity.selector,
+        abi.encodeWithSelector(PlusPlusPoolHook.UnsupportedLiquidityOperation.selector),
+        abi.encodeWithSelector(Hooks.HookCallFailed.selector)
+      )
+    );
+    this.helper_addLiquidity(
+      key,
+      tickLower,
+      tickUpper,
+      liquidityAmount,
+      amount0Expected + 1,
+      amount1Expected + 1,
+      address(this),
+      block.timestamp,
+      ZERO_BYTES
+    );
+  }
+
+  function test_addLiquidity(bytes32 saltA, bytes32 saltB, uint128 liquidityAmount) public {
+    // Ensure that the salts are not the same
+    vm.assume(saltA != saltB);
+    // Create a regular token
+    address tokenA = address(new ERC20Mock{salt: saltA}());
+    // Creating a plusplus token pair
+    address rawToken = address(new ERC20Mock{salt: saltB}());
+    address tokenB = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
+    currency0 = tokenA < tokenB ? Currency.wrap(tokenA) : Currency.wrap(tokenB);
+    currency1 = tokenA < tokenB ? Currency.wrap(tokenB) : Currency.wrap(tokenA);
+
+    // Attempt to create a pool with the correct token pair
+    key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
+    poolId = key.toId();
+    manager.initialize(key, SQRT_PRICE_1_1);
+
+    // // Attempt to add liquidity to the pool
+    // tickLower = TickMath.minUsableTick(key.tickSpacing);
+    // tickUpper = TickMath.maxUsableTick(key.tickSpacing);
+    tickLower = helper_boundInt24(
+      tickLower, TickMath.minUsableTick(key.tickSpacing), TickMath.maxUsableTick(key.tickSpacing) - key.tickSpacing, key.tickSpacing
+    );
+    tickUpper = helper_boundInt24(tickUpper, tickLower + key.tickSpacing, TickMath.maxUsableTick(key.tickSpacing), key.tickSpacing);
+    // console.log("TEST: tickLower", tickLower);
+    // console.log("TEST: tickUpper", tickUpper);
+
+
+    // liquidityAmount = uint128(bound(liquidityAmount, 1, type(uint128).max));
+    liquidityAmount = 9e18;
+
+    (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
+      SQRT_PRICE_1_1, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), liquidityAmount
+    );
+
+    console.log("TEST: amount0Expected", amount0Expected);
+    console.log("TEST: amount1Expected", amount1Expected);
+
+    if (tokenA < tokenB) {
+      ERC20Mock(tokenA).mint(address(this), amount0Expected + 1);
+      helper_dealRawAndPlusPlus(rawToken, 0, address(0), tokenB, amount1Expected + 1, address(this));
+    } else {
+      ERC20Mock(tokenA).mint(address(this), amount1Expected + 1);
+      helper_dealRawAndPlusPlus(rawToken, 0, address(0), tokenB, amount0Expected + 1, address(this));
+    }
+
+    // Approve the hook to take the tokens
+    IERC20(Currency.unwrap(key.currency0)).approve(address(hook), amount0Expected);
+    IERC20(Currency.unwrap(key.currency1)).approve(address(hook), amount1Expected);
+
+    hook.addLiquidity(
+      key,
+      IPoolManager.ModifyLiquidityParams({
+        tickLower: tickLower,
+        tickUpper: tickUpper,
+        liquidityDelta: int256(uint256(liquidityAmount)),
+        salt: bytes32(0)
+      })
+    );
+  }
 }

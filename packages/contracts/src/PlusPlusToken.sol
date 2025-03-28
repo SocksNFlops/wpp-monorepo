@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
+import {console} from "forge-std/console.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -187,5 +188,19 @@ contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
 
     // Calculate total points
     return $._lastTotalStake.accruedPoints + (uint256(block.timestamp) - $._lastTotalStake.timestamp) * totalSupply();
+  }
+
+  function transfer(address to, uint256 amount) public override(ERC20Upgradeable, IERC20) returns (bool) {
+    console.log("\t\t\t\t\t\tPLUSPLUS: transfer:", msg.sender, to, amount);
+    super.transfer(to, amount);
+    emit Transfer(msg.sender, to, amount);
+    return true;
+  }
+
+  function transferFrom(address from, address to, uint256 amount) public override(ERC20Upgradeable, IERC20) returns (bool) {
+    console.log("\t\t\t\t\t\tPLUSPLUS: transferFrom:", from, to, amount);
+    super.transferFrom(from, to, amount);
+    emit Transfer(from, to, amount);
+    return true;
   }
 }
