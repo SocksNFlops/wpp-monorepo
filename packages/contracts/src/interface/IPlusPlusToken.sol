@@ -6,10 +6,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 interface IPlusPlusToken is IERC20 {
   /**
    * @notice The token stake for a given account
+   * @param shares The shares of the principal deposited
    * @param accruedPoints The amount of accrued points
    * @param timestamp The last timestamp when points were updated
    */
   struct TokenStake {
+    uint256 shares;
     uint256 accruedPoints;
     uint128 timestamp;
   }

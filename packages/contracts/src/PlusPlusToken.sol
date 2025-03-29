@@ -10,6 +10,7 @@ import {IPlusPlusToken} from "./interface/IPlusPlusToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 // ToDo: Rewrite points to use shares rather than raw deposit amounts
 // ToDo: Separate tokenHolder and points-earner
@@ -21,6 +22,8 @@ contract PlusPlusToken is
   IPlusPlusToken
 {
   using SafeERC20 for IERC20;
+
+  uint256 public constant POINTS_PRECISION = 1e6;
 
   /**
    * @custom:storage-location erc7201:plusplus.storage.plusplus
@@ -141,7 +144,7 @@ contract PlusPlusToken is
     // Get the token stake
     TokenStake storage tokenStake = $._tokenStakes[account];
     // Increment the accrued points
-    tokenStake.accruedPoints += (uint256(block.timestamp) - tokenStake.timestamp) * balanceOf(account);
+    tokenStake.accruedPoints += (uint256(block.timestamp) - tokenStake.timestamp) * tokenStake.shares;
     // Update timestamp to now
     tokenStake.timestamp = uint128(block.timestamp);
   }
@@ -152,8 +155,19 @@ contract PlusPlusToken is
     // Get the last total stake
     TokenStake storage _lastTotalStake = $._lastTotalStake;
     // Update total points and last timestamp
-    _lastTotalStake.accruedPoints += (uint256(block.timestamp) - _lastTotalStake.timestamp) * totalSupply();
+    _lastTotalStake.accruedPoints += (uint256(block.timestamp) - _lastTotalStake.timestamp) * _lastTotalStake.shares;
     _lastTotalStake.timestamp = uint128(block.timestamp);
+  }
+
+  function calculateShares(uint256 depositAmount) internal view returns (uint256) {
+    // Fetch storage
+    PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
+    TokenStake storage _lastTotalStake = $._lastTotalStake;
+    if (_lastTotalStake.shares == 0) {
+      return depositAmount * POINTS_PRECISION;
+    } else {
+      return Math.mulDiv(depositAmount, _lastTotalStake.shares, totalSupply());
+    }
   }
 
   /**
@@ -202,15 +216,15 @@ contract PlusPlusToken is
     amount = rawAmount;
   }
 
-  function points(address account) public view returns (uint256 pendingPoints) {
+  function points(address account) public view returns (uint256 points) {
     // Fetch storage
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
 
     // Get the token stake
     TokenStake storage tokenStake = $._tokenStakes[account];
 
-    // Calculate pending points
-    pendingPoints = tokenStake.accruedPoints + (uint256(block.timestamp) - tokenStake.timestamp) * balanceOf(account);
+    // Calculate pending points and add them to accrued points
+    points = tokenStake.accruedPoints + (uint256(block.timestamp) - tokenStake.timestamp) * tokenStake.shares;
   }
 
   function totalPoints() public view returns (uint256) {
@@ -218,7 +232,7 @@ contract PlusPlusToken is
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
 
     // Calculate total points
-    return $._lastTotalStake.accruedPoints + (uint256(block.timestamp) - $._lastTotalStake.timestamp) * totalSupply();
+    return $._lastTotalStake.accruedPoints + (uint256(block.timestamp) - $._lastTotalStake.timestamp) * $._lastTotalStake.shares;
   }
 
   /**
@@ -251,9 +265,23 @@ contract PlusPlusToken is
    * @inheritdoc ERC20Upgradeable
    */
   function _update(address from, address to, uint256 value) internal override {
+    // Fetch storage
+    PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
+
     // Revert if the recipient is not whitelisted
     if (to != address(0) && !this.isWhitelisted(to)) {
       revert NotWhitelisted(to);
+    }
+
+    // Update shares
+    uint256 shares = calculateShares(value);
+    if (from != address(0)) {
+      $._tokenStakes[from].shares -= shares;
+      $._lastTotalStake.shares -= shares;
+    }
+    if (to != address(0)) {
+      $._tokenStakes[to].shares += shares;
+      $._lastTotalStake.shares += shares;
     }
 
     // Update the balance
