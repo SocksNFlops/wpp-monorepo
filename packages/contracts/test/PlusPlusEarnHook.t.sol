@@ -21,13 +21,13 @@ import {Constants} from "v4-core/test/utils/Constants.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {BalanceDeltaLibrary} from "v4-core/src/types/BalanceDelta.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
-import {PlusPlusWrapperHook} from "../src/PlusPlusWrapperHook.sol";
+import {PlusPlusEarnHook} from "../src/PlusPlusEarnHook.sol";
 import {MinimalRouter} from "./utils/MinimalRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PlusPlusToken} from "../src/PlusPlusToken.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 
-contract PlusPlusWrapperHookTest is Test, Fixtures {
+contract PlusPlusEarnHookTest is Test, Fixtures {
   using EasyPosm for IPositionManager;
   using PoolIdLibrary for PoolKey;
   using CurrencyLibrary for Currency;
@@ -39,7 +39,7 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
   int24 constant TICK_SPACING = 1;
 
   MinimalRouter minimalRouter;
-  PlusPlusWrapperHook hook;
+  PlusPlusEarnHook hook;
   PoolId poolId;
 
   uint256 tokenId;
@@ -64,8 +64,8 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     );
 
     bytes memory constructorArgs = abi.encode(manager); //Add all the necessary constructor arguments from the hook
-    deployCodeTo("PlusPlusWrapperHook.sol:PlusPlusWrapperHook", constructorArgs, flags);
-    hook = PlusPlusWrapperHook(flags);
+    deployCodeTo("PlusPlusEarnHook.sol:PlusPlusEarnHook", constructorArgs, flags);
+    hook = PlusPlusEarnHook(flags);
   }
 
   function deployMinimalRouterWithPermissions() public {
@@ -109,21 +109,22 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     return address(token);
   }
 
-  function helper_dealRawAndPlusPlus(
-    address rawToken,
-    uint256 rawAmount,
-    address rawRecipient,
+  function helper_dealEarnAndPlusPlus(
+    address earnToken,
+    uint256 earnAmount,
+    address earnRecipient,
     address plusPlusToken,
     uint256 plusPlusAmount,
     address plusPlusRecipient
   ) internal {
-    if (rawAmount > 0) {
-      ERC20Mock(rawToken).mint(rawRecipient, rawAmount);
+    if (earnAmount > 0) {
+      ERC20Mock(earnToken).mint(earnRecipient, earnAmount);
     }
     if (plusPlusAmount > 0) {
-      ERC20Mock(rawToken).mint(address(this), plusPlusAmount);
-      ERC20Mock(rawToken).approve(address(plusPlusToken), plusPlusAmount);
-      PlusPlusToken(plusPlusToken).deposit(plusPlusRecipient, plusPlusAmount);
+      ERC20Mock(earnToken).mint(address(this), plusPlusAmount);
+      ERC20Mock(earnToken).approve(address(plusPlusToken), plusPlusAmount);
+      PlusPlusToken(plusPlusToken).earnDeposit(plusPlusAmount);
+      IERC20(plusPlusToken).transfer(plusPlusRecipient, plusPlusAmount);
     }
   }
 
@@ -158,7 +159,7 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
         CustomRevert.WrappedError.selector,
         address(hook),
         IHooks.beforeInitialize.selector,
-        abi.encodeWithSelector(PlusPlusWrapperHook.UnsupportedTokenPair.selector),
+        abi.encodeWithSelector(PlusPlusEarnHook.UnsupportedTokenPair.selector),
         abi.encodeWithSelector(Hooks.HookCallFailed.selector)
       )
     );
@@ -177,7 +178,7 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
         CustomRevert.WrappedError.selector,
         address(hook),
         IHooks.beforeInitialize.selector,
-        abi.encodeWithSelector(PlusPlusWrapperHook.UnsupportedFee.selector),
+        abi.encodeWithSelector(PlusPlusEarnHook.UnsupportedFee.selector),
         abi.encodeWithSelector(Hooks.HookCallFailed.selector)
       )
     );
@@ -196,7 +197,7 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
         CustomRevert.WrappedError.selector,
         address(hook),
         IHooks.beforeInitialize.selector,
-        abi.encodeWithSelector(PlusPlusWrapperHook.UnsupportedTickSpacing.selector),
+        abi.encodeWithSelector(PlusPlusEarnHook.UnsupportedTickSpacing.selector),
         abi.encodeWithSelector(Hooks.HookCallFailed.selector)
       )
     );
@@ -204,11 +205,11 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
   }
 
   function test_beforeInitialize_correctCurrencyPair(bytes32 salt) public {
-    // Creating a new raw token and plusplus token pair
-    address rawToken = address(new ERC20Mock{salt: salt}());
-    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
-    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
-    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+    // Creating a new earn token and plusplus token pair
+    address earnToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(address(new ERC20Mock()), earnToken, 5000);
+    currency0 = earnToken < plusPlusToken ? Currency.wrap(earnToken) : Currency.wrap(plusPlusToken);
+    currency1 = earnToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(earnToken);
 
     // Attempt to create a pool with the correct token pair
     key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
@@ -221,11 +222,11 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
   }
 
   function test_beforeAddLiquidity_revert(bytes32 salt, uint128 liquidityAmount) public {
-    // Creating a new raw token and plusplus token pair
-    address rawToken = address(new ERC20Mock{salt: salt}());
-    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
-    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
-    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+    // Creating a new earn token and plusplus token pair
+    address earnToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(address(new ERC20Mock()), earnToken, 5000);
+    currency0 = earnToken < plusPlusToken ? Currency.wrap(earnToken) : Currency.wrap(plusPlusToken);
+    currency1 = earnToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(earnToken);
 
     // Attempt to create a pool with the correct token pair
     key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
@@ -242,13 +243,13 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
       SQRT_PRICE_1_1, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), liquidityAmount
     );
 
-    if (rawToken < plusPlusToken) {
-      helper_dealRawAndPlusPlus(
-        rawToken, amount0Expected + 1, address(this), plusPlusToken, amount1Expected + 1, address(this)
+    if (earnToken < plusPlusToken) {
+      helper_dealEarnAndPlusPlus(
+        earnToken, amount0Expected + 1, address(this), plusPlusToken, amount1Expected + 1, address(this)
       );
     } else {
-      helper_dealRawAndPlusPlus(
-        rawToken, amount1Expected + 1, address(this), plusPlusToken, amount0Expected + 1, address(this)
+      helper_dealEarnAndPlusPlus(
+        earnToken, amount1Expected + 1, address(this), plusPlusToken, amount0Expected + 1, address(this)
       );
     }
 
@@ -258,7 +259,7 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
         CustomRevert.WrappedError.selector,
         address(hook),
         IHooks.beforeAddLiquidity.selector,
-        abi.encodeWithSelector(PlusPlusWrapperHook.UnsupportedLiquidityOperation.selector),
+        abi.encodeWithSelector(PlusPlusEarnHook.UnsupportedLiquidityOperation.selector),
         abi.encodeWithSelector(Hooks.HookCallFailed.selector)
       )
     );
@@ -275,15 +276,15 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     );
   }
 
-  function test_swap_rawToPlusPlusExactIn(bytes32 salt, uint128 amountIn) public {
+  function test_swap_earnToPlusPlusExactIn(bytes32 salt, uint128 amountIn) public {
     // Ensure amountIn is valid
     amountIn = uint128(bound(amountIn, 1, type(uint128).max / 2));
 
-    // Creating a new raw token and plusplus token pair
-    address rawToken = address(new ERC20Mock{salt: salt}());
-    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
-    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
-    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+    // Creating a new earn token and plusplus token pair
+    address earnToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(address(new ERC20Mock()), earnToken, 5000);
+    currency0 = earnToken < plusPlusToken ? Currency.wrap(earnToken) : Currency.wrap(plusPlusToken);
+    currency1 = earnToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(earnToken);
 
     // Attempt to create a pool with the correct token pair
     key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
@@ -291,39 +292,39 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     manager.initialize(key, SQRT_PRICE_1_1);
 
     // Deal tokens to the sender
-    helper_dealRawAndPlusPlus(rawToken, amountIn, address(this), plusPlusToken, 0, address(0));
+    helper_dealEarnAndPlusPlus(earnToken, amountIn, address(this), plusPlusToken, 0, address(0));
 
     // Approve routers and managers to take tokens
     helper_approveAllRoutersAndManagers();
 
-    assertEq(IERC20(rawToken).balanceOf(address(this)), amountIn, "RawToken balance is not amountIn");
+    assertEq(IERC20(earnToken).balanceOf(address(this)), amountIn, "EarnToken balance is not amountIn");
     assertEq(IERC20(plusPlusToken).balanceOf(address(this)), 0, "PlusPlusToken balance is not 0");
 
     uint256 expectedOutput = amountIn;
 
-    minimalRouter.swap(key, rawToken < plusPlusToken, amountIn, 0, ZERO_BYTES);
+    minimalRouter.swap(key, earnToken < plusPlusToken, amountIn, 0, ZERO_BYTES);
 
     // Validate that swapper has correct balances
-    assertEq(IERC20(rawToken).balanceOf(address(this)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(earnToken).balanceOf(address(this)), 0, "EarnToken balance is not 0");
     assertEq(
       IERC20(plusPlusToken).balanceOf(address(this)), expectedOutput, "PlusPlusToken balance is not expectedOutput"
     );
 
     // Validate hook has no balances
-    assertEq(IERC20(rawToken).balanceOf(address(hook)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(earnToken).balanceOf(address(hook)), 0, "EarnToken balance is not 0");
     assertEq(IERC20(plusPlusToken).balanceOf(address(hook)), 0, "PlusPlusToken balance is not 0");
   }
 
-  function test_swap_rawToPlusPlusExactOut(bytes32 salt, uint128 amountOut) public {
+  function test_swap_earnToPlusPlusExactOut(bytes32 salt, uint128 amountOut) public {
     // Ensure amountOut is valid
     amountOut = uint128(bound(amountOut, 1, type(uint128).max / 2));
     uint256 amountIn = amountOut;
 
-    // Creating a new raw token and plusplus token pair
-    address rawToken = address(new ERC20Mock{salt: salt}());
-    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
-    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
-    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+    // Creating a new earn token and plusplus token pair
+    address earnToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(address(new ERC20Mock()), earnToken, 5000);
+    currency0 = earnToken < plusPlusToken ? Currency.wrap(earnToken) : Currency.wrap(plusPlusToken);
+    currency1 = earnToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(earnToken);
 
     // Attempt to create a pool with the correct token pair
     key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
@@ -331,34 +332,34 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     manager.initialize(key, SQRT_PRICE_1_1);
 
     // Deal tokens to the sender
-    helper_dealRawAndPlusPlus(rawToken, amountIn, address(this), plusPlusToken, 0, address(0));
+    helper_dealEarnAndPlusPlus(earnToken, amountIn, address(this), plusPlusToken, 0, address(0));
 
-    // Approve pool manager to take rawToken
+    // Approve pool manager to take earnToken
     helper_approveAllRoutersAndManagers();
 
-    assertEq(IERC20(rawToken).balanceOf(address(this)), amountIn, "RawToken balance is not amountIn");
+    assertEq(IERC20(earnToken).balanceOf(address(this)), amountIn, "EarnToken balance is not amountIn");
     assertEq(IERC20(plusPlusToken).balanceOf(address(this)), 0, "PlusPlusToken balance is not 0");
 
-    minimalRouter.swap(key, rawToken < plusPlusToken, amountIn, amountOut, ZERO_BYTES);
+    minimalRouter.swap(key, earnToken < plusPlusToken, amountIn, amountOut, ZERO_BYTES);
 
     // Validate that swapper has correct balances
-    assertEq(IERC20(rawToken).balanceOf(address(this)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(earnToken).balanceOf(address(this)), 0, "EarnToken balance is not 0");
     assertEq(IERC20(plusPlusToken).balanceOf(address(this)), amountOut, "PlusPlusToken balance is not amountOut");
 
     // Validate hook has no balances
-    assertEq(IERC20(rawToken).balanceOf(address(hook)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(earnToken).balanceOf(address(hook)), 0, "EarnToken balance is not 0");
     assertEq(IERC20(plusPlusToken).balanceOf(address(hook)), 0, "PlusPlusToken balance is not 0");
   }
 
-  function test_swap_plusPlusToRawExactIn(bytes32 salt, uint128 amountIn) public {
+  function test_swap_plusPlusToEarnExactIn(bytes32 salt, uint128 amountIn) public {
     // Ensure amountIn is valid
     amountIn = uint128(bound(amountIn, 1, type(uint128).max / 2));
 
-    // Creating a new raw token and plusplus token pair
-    address rawToken = address(new ERC20Mock{salt: salt}());
-    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
-    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
-    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+    // Creating a new earn token and plusplus token pair
+    address earnToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(address(new ERC20Mock()), earnToken, 5000);
+    currency0 = earnToken < plusPlusToken ? Currency.wrap(earnToken) : Currency.wrap(plusPlusToken);
+    currency1 = earnToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(earnToken);
 
     // Attempt to create a pool with the correct token pair
     key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
@@ -366,37 +367,37 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     manager.initialize(key, SQRT_PRICE_1_1);
 
     // Deal tokens to the sender
-    helper_dealRawAndPlusPlus(rawToken, 0, address(0), plusPlusToken, amountIn, address(this));
+    helper_dealEarnAndPlusPlus(earnToken, 0, address(0), plusPlusToken, amountIn, address(this));
 
     // Approve routers and managers to take tokens
     helper_approveAllRoutersAndManagers();
 
     assertEq(IERC20(plusPlusToken).balanceOf(address(this)), amountIn, "PlusPlusToken balance is not amountIn");
-    assertEq(IERC20(rawToken).balanceOf(address(this)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(earnToken).balanceOf(address(this)), 0, "EarnToken balance is not 0");
 
     uint256 expectedOutput = amountIn;
 
-    minimalRouter.swap(key, rawToken > plusPlusToken, amountIn, 0, ZERO_BYTES);
+    minimalRouter.swap(key, earnToken > plusPlusToken, amountIn, 0, ZERO_BYTES);
 
     // Validate that swapper has correct balances
     assertEq(IERC20(plusPlusToken).balanceOf(address(this)), 0, "PlusPlusToken balance is not 0");
-    assertEq(IERC20(rawToken).balanceOf(address(this)), expectedOutput, "RawToken balance is not expectedOutput");
+    assertEq(IERC20(earnToken).balanceOf(address(this)), expectedOutput, "EarnToken balance is not expectedOutput");
 
     // Validate hook has no balances
-    assertEq(IERC20(rawToken).balanceOf(address(hook)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(earnToken).balanceOf(address(hook)), 0, "EarnToken balance is not 0");
     assertEq(IERC20(plusPlusToken).balanceOf(address(hook)), 0, "PlusPlusToken balance is not 0");
   }
 
-  function test_swap_plusPlusToRawExactOut(bytes32 salt, uint128 amountOut) public {
+  function test_swap_plusPlusToEarnExactOut(bytes32 salt, uint128 amountOut) public {
     // Ensure amountOut is valid
     amountOut = uint128(bound(amountOut, 1, type(uint128).max / 2));
     uint256 amountIn = amountOut;
 
-    // Creating a new raw token and plusplus token pair
-    address rawToken = address(new ERC20Mock{salt: salt}());
-    address plusPlusToken = helper_makePlusPlusToken(rawToken, address(new ERC20Mock()), 5000);
-    currency0 = rawToken < plusPlusToken ? Currency.wrap(rawToken) : Currency.wrap(plusPlusToken);
-    currency1 = rawToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(rawToken);
+    // Creating a new earn token and plusplus token pair
+    address earnToken = address(new ERC20Mock{salt: salt}());
+    address plusPlusToken = helper_makePlusPlusToken(address(new ERC20Mock()), earnToken, 5000);
+    currency0 = earnToken < plusPlusToken ? Currency.wrap(earnToken) : Currency.wrap(plusPlusToken);
+    currency1 = earnToken < plusPlusToken ? Currency.wrap(plusPlusToken) : Currency.wrap(earnToken);
 
     // Attempt to create a pool with the correct token pair
     key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(hook));
@@ -404,22 +405,22 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
     manager.initialize(key, SQRT_PRICE_1_1);
 
     // Deal tokens to the sender
-    helper_dealRawAndPlusPlus(rawToken, 0, address(0), plusPlusToken, amountIn, address(this));
+    helper_dealEarnAndPlusPlus(earnToken, 0, address(0), plusPlusToken, amountIn, address(this));
 
     // Approve routers and managers to take tokens
     helper_approveAllRoutersAndManagers();
 
     assertEq(IERC20(plusPlusToken).balanceOf(address(this)), amountIn, "PlusPlusToken balance is not amountIn");
-    assertEq(IERC20(rawToken).balanceOf(address(this)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(earnToken).balanceOf(address(this)), 0, "EarnToken balance is not 0");
 
-    minimalRouter.swap(key, rawToken > plusPlusToken, amountIn, amountOut, ZERO_BYTES);
+    minimalRouter.swap(key, earnToken > plusPlusToken, amountIn, amountOut, ZERO_BYTES);
 
     // Validate that swapper has correct balances
-    assertEq(IERC20(rawToken).balanceOf(address(this)), amountOut, "RawToken balance is not amountOut");
+    assertEq(IERC20(earnToken).balanceOf(address(this)), amountOut, "EarnToken balance is not amountOut");
     assertEq(IERC20(plusPlusToken).balanceOf(address(this)), 0, "PlusPlusToken balance is not 0");
 
     // Validate hook has no balances
-    assertEq(IERC20(rawToken).balanceOf(address(hook)), 0, "RawToken balance is not 0");
+    assertEq(IERC20(earnToken).balanceOf(address(hook)), 0, "EarnToken balance is not 0");
     assertEq(IERC20(plusPlusToken).balanceOf(address(hook)), 0, "PlusPlusToken balance is not 0");
   }
 }

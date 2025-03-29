@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {console} from "forge-std/console.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -12,7 +11,6 @@ import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/acce
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-// ToDo: Separate tokenHolder and points-earner
 contract PlusPlusToken is
   ERC20Upgradeable,
   EIP712Upgradeable,
@@ -22,22 +20,24 @@ contract PlusPlusToken is
 {
   using SafeERC20 for IERC20;
 
-  uint256 public constant POINTS_PRECISION = 1e6;
+  // Access control roles
+  bytes32 public constant DEPOSIT_WITHDRAW_ROLE = keccak256("DEPOSIT_WITHDRAW_ROLE");
 
   /**
    * @custom:storage-location erc7201:plusplus.storage.plusplus
    * @param _rawToken The address of the raw token
-   * @param _earningToken The address of the earning token
+   * @param _earnToken The address of the earn token
    * @param _targetRatio The target ratio of raw token to earning token principle
-   * @param _lastTotalStake The last total stake
    */
   struct PlusPlusTokenStorage {
     address _rawToken;
-    address _earningToken;
+    address _earnToken;
     uint16 _targetRatio;
-    TokenStake _lastTotalStake;
-    mapping(address => TokenStake) _tokenStakes;
     mapping(address => bool) _whitelist;
+    bool _rawDepositOn;
+    bool _rawWithdrawOn;
+    bool _earnDepositOn;
+    bool _earnWithdrawOn;
   }
 
   // ToDo: Validate this hash
@@ -84,14 +84,18 @@ contract PlusPlusToken is
     _grantRole(DEFAULT_ADMIN_ROLE, admin_);
   }
 
-  function __PlusPlusToken_init_unchained(address rawToken_, address earningToken_, uint16 targetRatio_)
+  function __PlusPlusToken_init_unchained(address rawToken_, address earnToken_, uint16 targetRatio_)
     internal
     onlyInitializing
   {
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
     $._rawToken = rawToken_;
-    $._earningToken = earningToken_;
+    $._earnToken = earnToken_;
     $._targetRatio = targetRatio_;
+    $._rawDepositOn = true;
+    $._rawWithdrawOn = true;
+    $._earnDepositOn = true;
+    $._earnWithdrawOn = true;
   }
 
   /**
@@ -118,8 +122,15 @@ contract PlusPlusToken is
   /**
    * @inheritdoc IPlusPlusToken
    */
-  function earningToken() external view returns (address) {
-    return _getPlusPlusTokenStorage()._earningToken;
+  function earnToken() external view returns (address) {
+    return _getPlusPlusTokenStorage()._earnToken;
+  }
+
+  /**
+   * @inheritdoc IPlusPlusToken
+   */
+  function rawAndEarnToken() external view returns (address, address) {
+    return (_getPlusPlusTokenStorage()._rawToken, _getPlusPlusTokenStorage()._earnToken);
   }
 
   /**
@@ -132,58 +143,30 @@ contract PlusPlusToken is
   /**
    * @inheritdoc IPlusPlusToken
    */
-  function lastTotalStake() external view returns (TokenStake memory) {
-    return _getPlusPlusTokenStorage()._lastTotalStake;
-  }
-
-  function _convertPoints(address account) internal {
+  function currentRatio() external view returns (uint16) {
     // Fetch storage
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
 
-    // Get the token stake
-    TokenStake storage tokenStake = $._tokenStakes[account];
-    // Increment the accrued points
-    tokenStake.accruedPoints += (uint256(block.timestamp) - tokenStake.timestamp) * tokenStake.shares;
-    // Update timestamp to now
-    tokenStake.timestamp = uint128(block.timestamp);
-  }
+    // Return the current ratio
+    uint256 rawTokenBalance = IERC20($._rawToken).balanceOf(address(this));
 
-  function _updateTotalPoints() internal {
-    // Fetch storage
-    PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
-    // Get the last total stake
-    TokenStake storage _lastTotalStake = $._lastTotalStake;
-    // Update total points and last timestamp
-    _lastTotalStake.accruedPoints += (uint256(block.timestamp) - _lastTotalStake.timestamp) * _lastTotalStake.shares;
-    _lastTotalStake.timestamp = uint128(block.timestamp);
-  }
-
-  function calculateShares(uint256 depositAmount) internal view returns (uint256) {
-    // Fetch storage
-    PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
-    TokenStake storage _lastTotalStake = $._lastTotalStake;
-    if (_lastTotalStake.shares == 0) {
-      return depositAmount * POINTS_PRECISION;
-    } else {
-      return Math.mulDiv(depositAmount, _lastTotalStake.shares, totalSupply());
-    }
+    return uint16((rawTokenBalance * 1e4) / totalSupply());
   }
 
   /**
    * @inheritdoc IPlusPlusToken
    */
-  function deposit(address account, uint256 rawAmount) external returns (uint256 amount) {
+  function rawDeposit(uint256 rawAmount) external returns (uint256 amount) {
     // Fetch storage
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
 
-    // Update existing token stake
-    _convertPoints(account);
-
-    // Update total points
-    _updateTotalPoints();
+    // Revert if raw deposits are disabled
+    if (!$._rawDepositOn) {
+      revert ExchangeDisabled();
+    }
 
     // Mint plusplus tokens
-    _mint(account, rawAmount);
+    _mint(msg.sender, rawAmount);
 
     // Transfer raw tokens from sender to this contract
     IERC20($._rawToken).safeTransferFrom(msg.sender, address(this), rawAmount);
@@ -195,44 +178,88 @@ contract PlusPlusToken is
   /**
    * @inheritdoc IPlusPlusToken
    */
-  function withdraw(address account, uint256 rawAmount) external returns (uint256 amount) {
+  function rawWithdraw(uint256 rawAmount) external returns (uint256 amount) {
     // Fetch storage
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
 
-    // Update existing token stake
-    _convertPoints(account);
-
-    // Update total points
-    _updateTotalPoints();
+    // Revert if raw withdrawals are disabled
+    if (!$._rawWithdrawOn) {
+      revert ExchangeDisabled();
+    }
 
     // Burn plusplus tokens
-    _burn(account, rawAmount);
+    _burn(msg.sender, rawAmount);
 
     // Transfer raw tokens from this contract to sender
-    IERC20($._rawToken).safeTransfer(account, rawAmount);
+    IERC20($._rawToken).safeTransfer(msg.sender, rawAmount);
 
     // Return amount of plusplus tokens burned
     amount = rawAmount;
   }
 
-  function points(address account) public view returns (uint256 points) {
+  /**
+   * @inheritdoc IPlusPlusToken
+   */
+  function earnDeposit(uint256 earnAmount) external returns (uint256 amount) {
     // Fetch storage
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
 
-    // Get the token stake
-    TokenStake storage tokenStake = $._tokenStakes[account];
+    // Revert if earn deposits are disabled
+    if (!$._earnDepositOn) {
+      revert ExchangeDisabled();
+    }
 
-    // Calculate pending points and add them to accrued points
-    points = tokenStake.accruedPoints + (uint256(block.timestamp) - tokenStake.timestamp) * tokenStake.shares;
+    // Mint plusplus tokens
+    _mint(msg.sender, earnAmount);
+
+    // Transfer earning tokens from sender to this contract
+    IERC20($._earnToken).safeTransferFrom(msg.sender, address(this), earnAmount);
+
+    // Return amount of plusplus tokens minted
+    amount = earnAmount;
   }
 
-  function totalPoints() public view returns (uint256) {
+  /**
+   * @inheritdoc IPlusPlusToken
+   */
+  function earnWithdraw(uint256 earnAmount) external returns (uint256 amount) {
     // Fetch storage
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
 
-    // Calculate total points
-    return $._lastTotalStake.accruedPoints
-      + (uint256(block.timestamp) - $._lastTotalStake.timestamp) * $._lastTotalStake.shares;
+    // Revert if earn withdrawals are disabled
+    if (!$._earnWithdrawOn) {
+      revert ExchangeDisabled();
+    }
+
+    // Burn plusplus tokens
+    _burn(msg.sender, earnAmount);
+
+    // Transfer earning tokens from this contract to sender
+    IERC20($._earnToken).safeTransfer(msg.sender, earnAmount);
+
+    // Return amount of plusplus tokens burned
+    amount = earnAmount;
+  }
+
+  function burn(uint256 amount) external returns (uint256 rawAmount, uint256 earnAmount) {
+    // Fetch storage
+    PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
+
+    uint256 totalSupply = this.totalSupply();
+    uint256 rawTokenBalance = IERC20($._rawToken).balanceOf(address(this));
+    uint256 earnTokenBalance = IERC20($._earnToken).balanceOf(address(this));
+
+    rawAmount = Math.mulDiv(amount, rawTokenBalance, totalSupply);
+    earnAmount = Math.mulDiv(amount, earnTokenBalance, totalSupply);
+
+    // Burn plusplus tokens
+    _burn(msg.sender, amount);
+
+    // Transfer raw tokens from this contract to sender
+    IERC20($._rawToken).safeTransfer(msg.sender, rawAmount);
+
+    // Transfer earning tokens from this contract to sender
+    IERC20($._earnToken).safeTransfer(msg.sender, earnAmount);
   }
 
   /**
@@ -265,26 +292,29 @@ contract PlusPlusToken is
    * @inheritdoc ERC20Upgradeable
    */
   function _update(address from, address to, uint256 value) internal override {
-    // Fetch storage
-    PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
-
     // Revert if the recipient is not whitelisted
     if (to != address(0) && !this.isWhitelisted(to)) {
       revert NotWhitelisted(to);
     }
 
-    // Update shares
-    uint256 shares = calculateShares(value);
-    if (from != address(0)) {
-      $._tokenStakes[from].shares -= shares;
-      $._lastTotalStake.shares -= shares;
-    }
-    if (to != address(0)) {
-      $._tokenStakes[to].shares += shares;
-      $._lastTotalStake.shares += shares;
-    }
-
     // Update the balance
     super._update(from, to, value);
+  }
+
+  /**
+   * @inheritdoc IPlusPlusToken
+   */
+  function updateDepositWithdrawSwitches(bool rawDepositOn, bool rawWithdrawOn, bool earnDepositOn, bool earnWithdrawOn)
+    external
+    onlyRole(DEFAULT_ADMIN_ROLE)
+  {
+    // Fetch storage
+    PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
+
+    // Update the deposit and withdraw switches
+    $._rawDepositOn = rawDepositOn;
+    $._rawWithdrawOn = rawWithdrawOn;
+    $._earnDepositOn = earnDepositOn;
+    $._earnWithdrawOn = earnWithdrawOn;
   }
 }

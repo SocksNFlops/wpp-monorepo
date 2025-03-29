@@ -9,18 +9,18 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 contract PlusPlusTokenTest is Test {
   PlusPlusToken public plusplusToken;
   IERC20 public rawToken;
-  IERC20 public earningToken;
+  IERC20 public earnToken;
   uint16 public targetRatio = 5_000;
   address public admin = makeAddr("admin");
 
   function setUp() public {
     // Set up raw and earning tokens
     rawToken = new ERC20Mock();
-    earningToken = new ERC20Mock();
+    earnToken = new ERC20Mock();
 
     // Initialize plusplus token
     plusplusToken = new PlusPlusToken();
-    plusplusToken.initialize(address(rawToken), address(earningToken), targetRatio, admin);
+    plusplusToken.initialize(address(rawToken), address(earnToken), targetRatio, admin);
 
     // Whitelist this contract as a recipient
     vm.prank(admin);
@@ -29,14 +29,12 @@ contract PlusPlusTokenTest is Test {
 
   function test_initialize() public view {
     assertEq(plusplusToken.rawToken(), address(rawToken));
-    assertEq(plusplusToken.earningToken(), address(earningToken));
+    assertEq(plusplusToken.earnToken(), address(earnToken));
     assertEq(plusplusToken.targetRatio(), targetRatio);
-    assertEq(plusplusToken.lastTotalStake().accruedPoints, 0);
-    assertEq(plusplusToken.lastTotalStake().timestamp, 0);
     assertTrue(plusplusToken.hasRole(plusplusToken.DEFAULT_ADMIN_ROLE(), admin));
   }
 
-  function test_deposit(address account, uint128 depositAmount) public {
+  function test_rawDeposit(address account, uint128 depositAmount) public {
     // Ensure that the account is not the zero address
     vm.assume(account != address(0));
 
@@ -44,59 +42,23 @@ contract PlusPlusTokenTest is Test {
     vm.prank(admin);
     plusplusToken.updateWhitelist(account, true);
 
-    // Deal tokens to test
-    deal(address(rawToken), address(this), depositAmount);
+    // Deal tokens to account
+    deal(address(rawToken), account, depositAmount);
 
     // Grant allowance to the plusplus token
+    vm.prank(account);
     rawToken.approve(address(plusplusToken), depositAmount);
 
-    // Deposit
-    plusplusToken.deposit(account, depositAmount);
+    // Raw-deposit
+    vm.prank(account);
+    plusplusToken.rawDeposit(depositAmount);
 
     // Assertions
     assertEq(plusplusToken.balanceOf(account), depositAmount, "Balance of account should be the deposit amount");
     assertEq(rawToken.balanceOf(address(this)), 0, "Raw token balance of this should be 0");
-    assertEq(plusplusToken.points(account), 0, "Points of account should be 0");
   }
 
-  function test_points(address account, uint128 depositAmount, uint32 timeElapsed) public {
-    // Ensure that the account is not the zero address
-    vm.assume(account != address(0));
-
-    // Add account to whitelist for this test
-    vm.prank(admin);
-    plusplusToken.updateWhitelist(account, true);
-
-    // Deal tokens to test
-    deal(address(rawToken), address(this), depositAmount);
-
-    // Grant allowance to the plusplus token
-    rawToken.approve(address(plusplusToken), depositAmount);
-
-    // Deposit
-    plusplusToken.deposit(account, depositAmount);
-
-    // Validate that the points are 0
-    assertEq(plusplusToken.points(account), 0, "Points of account should be 0");
-    assertEq(plusplusToken.totalPoints(), 0, "Total points should be 0");
-
-    // Advance time
-    skip(timeElapsed);
-
-    // Validate that the points are correct
-    assertEq(
-      plusplusToken.points(account),
-      uint256(timeElapsed) * depositAmount * plusplusToken.POINTS_PRECISION(),
-      "Points of account are not correct"
-    );
-    assertEq(
-      plusplusToken.totalPoints(),
-      uint256(timeElapsed) * depositAmount * plusplusToken.POINTS_PRECISION(),
-      "Total points are not correct"
-    );
-  }
-
-  function test_withdraw(address account, uint128 depositAmount, uint128 withdrawAmount, uint32 timeElapsed) public {
+  function test_rawWithdraw(address account, uint128 depositAmount, uint128 withdrawAmount, uint32 timeElapsed) public {
     // Ensure that the account is not the zero address
     vm.assume(account != address(0));
 
@@ -109,24 +71,23 @@ contract PlusPlusTokenTest is Test {
     depositAmount = uint128(bound(depositAmount, 1, type(uint128).max));
     withdrawAmount = uint128(bound(withdrawAmount, 0, depositAmount));
 
-    // Deal tokens to test
-    deal(address(rawToken), address(this), depositAmount);
+    // Deal tokens to account
+    deal(address(rawToken), account, depositAmount);
 
     // Grant allowance to the plusplus token
+    vm.prank(account);
     rawToken.approve(address(plusplusToken), depositAmount);
 
-    // Deposit
-    plusplusToken.deposit(account, depositAmount);
-
-    // Validate that the points are 0
-    assertEq(plusplusToken.points(account), 0, "Points of account should be 0");
-    assertEq(plusplusToken.totalPoints(), 0, "Total points should be 0");
+    // Raw-deposit
+    vm.prank(account);
+    plusplusToken.rawDeposit(depositAmount);
 
     // Advance time
     skip(timeElapsed);
 
-    // Withdraw the tokens
-    plusplusToken.withdraw(account, withdrawAmount);
+    // Raw-withdraw
+    vm.prank(account);
+    plusplusToken.rawWithdraw(withdrawAmount);
 
     // Validate the balance of the account and total supply
     assertEq(
@@ -139,17 +100,73 @@ contract PlusPlusTokenTest is Test {
       depositAmount - withdrawAmount,
       "Total supply should be the deposit amount minus the withdraw amount"
     );
+  }
 
-    // Validate that the points are correct
+  function test_earnDeposit(address account, uint128 depositAmount) public {
+    // Ensure that the account is not the zero address
+    vm.assume(account != address(0));
+
+    // Add account to whitelist for this test
+    vm.prank(admin);
+    plusplusToken.updateWhitelist(account, true);
+
+    // Deal tokens to test
+    deal(address(earnToken), account, depositAmount);
+
+    // Grant allowance to the plusplus token
+    vm.prank(account);
+    earnToken.approve(address(plusplusToken), depositAmount);
+
+    // Raw-deposit
+    vm.prank(account);
+    plusplusToken.earnDeposit(depositAmount);
+
+    // Assertions
+    assertEq(plusplusToken.balanceOf(account), depositAmount, "Balance of account should be the deposit amount");
+    assertEq(earnToken.balanceOf(address(this)), 0, "Earn token balance of this should be 0");
+  }
+
+  function test_earnWithdraw(address account, uint128 depositAmount, uint128 withdrawAmount, uint32 timeElapsed) public {
+    // Ensure that the account is not the zero address
+    vm.assume(account != address(0));
+
+    // Add account to whitelist for this test
+    vm.prank(admin);
+    plusplusToken.updateWhitelist(account, true);
+
+    // Ensure that the withdraw amount is less than the deposit amount
+    // Ensure that the withdraw amount is less than the deposit amount
+    depositAmount = uint128(bound(depositAmount, 1, type(uint128).max));
+    withdrawAmount = uint128(bound(withdrawAmount, 0, depositAmount));
+
+    // Deal tokens to account
+    deal(address(earnToken), account, depositAmount);
+
+    // Grant allowance to the plusplus token
+    vm.prank(account);
+    earnToken.approve(address(plusplusToken), depositAmount);
+
+    // Raw-deposit
+    vm.prank(account);
+    plusplusToken.earnDeposit(depositAmount);
+
+    // Advance time
+    skip(timeElapsed);
+
+    // Raw-withdraw
+    vm.prank(account);
+    plusplusToken.earnWithdraw(withdrawAmount);
+
+    // Validate the balance of the account and total supply
     assertEq(
-      plusplusToken.points(account),
-      uint256(timeElapsed) * (uint256(depositAmount) * plusplusToken.POINTS_PRECISION()),
-      "Points of account are not correct"
+      plusplusToken.balanceOf(account),
+      depositAmount - withdrawAmount,
+      "Balance of account should be the deposit amount minus the withdraw amount"
     );
     assertEq(
-      plusplusToken.totalPoints(),
-      uint256(timeElapsed) * (uint256(depositAmount) * plusplusToken.POINTS_PRECISION()),
-      "Total points are not correct"
+      plusplusToken.totalSupply(),
+      depositAmount - withdrawAmount,
+      "Total supply should be the deposit amount minus the withdraw amount"
     );
   }
 }

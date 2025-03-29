@@ -89,7 +89,8 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     if (plusPlusAmount > 0) {
       ERC20Mock(rawToken).mint(address(this), plusPlusAmount);
       ERC20Mock(rawToken).approve(address(plusPlusToken), plusPlusAmount);
-      PlusPlusToken(plusPlusToken).deposit(plusPlusRecipient, plusPlusAmount);
+      PlusPlusToken(plusPlusToken).rawDeposit(plusPlusAmount);
+      IERC20(plusPlusToken).transfer(plusPlusRecipient, plusPlusAmount);
     }
   }
 
@@ -249,7 +250,7 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
     );
   }
 
-  function test_modifyLiquidity_add(bytes32 saltA, bytes32 saltB, uint64 liquidityAmount) public {
+  function test_modifyLiquidity_addRaw(bytes32 saltA, bytes32 saltB, uint64 liquidityAmount) public {
     // Ensure that the salts are not the same
     vm.assume(saltA != saltB);
     // Create a regular token
@@ -303,7 +304,8 @@ contract PlusPlusPoolHookTest is Test, Fixtures {
         tickUpper: tickUpper,
         liquidityDelta: int256(uint256(liquidityAmount)),
         salt: bytes32(0)
-      })
+      }),
+      true
     );
 
     // Confirm that the hook now owns the liquidity added to the pool manager

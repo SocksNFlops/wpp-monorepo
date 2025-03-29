@@ -14,7 +14,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {IPlusPlusToken} from "./interface/IPlusPlusToken.sol";
 
-contract PlusPlusWrapperHook is BaseHook {
+contract PlusPlusEarnHook is BaseHook {
   using PoolIdLibrary for PoolKey;
   using CurrencySettler for Currency;
   using BeforeSwapDeltaLibrary for BeforeSwapDelta;
@@ -24,7 +24,7 @@ contract PlusPlusWrapperHook is BaseHook {
   error UnsupportedTokenPair();
   error UnsupportedLiquidityOperation();
 
-  mapping(Currency => mapping(Currency => bool)) public rawTokenIsZeroMap;
+  mapping(Currency => mapping(Currency => bool)) public earnTokenIsZeroMap;
 
   constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
 
@@ -54,28 +54,28 @@ contract PlusPlusWrapperHook is BaseHook {
     if (key.tickSpacing != 1) {
       revert UnsupportedTickSpacing();
     }
-    // Check if either token is a PlusPlusToken and the other is its raw token
+    // Check if either token is a PlusPlusToken and the other is its earn token
     // Try currency0 as PlusPlusToken
     (bool success, bytes memory data) =
-      Currency.unwrap(key.currency0).staticcall(abi.encodeWithSelector(IPlusPlusToken.rawToken.selector));
+      Currency.unwrap(key.currency0).staticcall(abi.encodeWithSelector(IPlusPlusToken.earnToken.selector));
 
     if (success && data.length >= 32) {
-      address rawTokenAddress = abi.decode(data, (address));
-      if (Currency.unwrap(key.currency1) == rawTokenAddress) {
-        // rawTokenIsZeroMap[key.currency0][key.currency1] = false; // Can omit this
-        IERC20(rawTokenAddress).approve(Currency.unwrap(key.currency0), type(uint256).max);
+      address earnTokenAddress = abi.decode(data, (address));
+      if (Currency.unwrap(key.currency1) == earnTokenAddress) {
+        // earnTokenIsZeroMap[key.currency0][key.currency1] = false; // Can omit this
+        IERC20(earnTokenAddress).approve(Currency.unwrap(key.currency0), type(uint256).max);
         return BaseHook.beforeInitialize.selector;
       }
     }
     // Try currency1 as PlusPlusToken
     (success, data) =
-      Currency.unwrap(key.currency1).staticcall(abi.encodeWithSelector(IPlusPlusToken.rawToken.selector));
+      Currency.unwrap(key.currency1).staticcall(abi.encodeWithSelector(IPlusPlusToken.earnToken.selector));
 
     if (success && data.length >= 32) {
-      address rawTokenAddress = abi.decode(data, (address));
-      if (Currency.unwrap(key.currency0) == rawTokenAddress) {
-        rawTokenIsZeroMap[key.currency0][key.currency1] = true;
-        IERC20(rawTokenAddress).approve(Currency.unwrap(key.currency1), type(uint256).max);
+      address earnTokenAddress = abi.decode(data, (address));
+      if (Currency.unwrap(key.currency0) == earnTokenAddress) {
+        earnTokenIsZeroMap[key.currency0][key.currency1] = true;
+        IERC20(earnTokenAddress).approve(Currency.unwrap(key.currency1), type(uint256).max);
         return BaseHook.beforeInitialize.selector;
       }
     }
@@ -99,40 +99,40 @@ contract PlusPlusWrapperHook is BaseHook {
     override
     returns (bytes4, BeforeSwapDelta, uint24)
   {
-    // XOR( Curr0 == RawToken, zeroForOne ) == 0 && (amountSpecified < 0)
-    bool rawTokenIsZero = rawTokenIsZeroMap[key.currency0][key.currency1];
+    // XOR( Curr0 == earnToken, zeroForOne ) == 0 && (amountSpecified < 0)
+    bool earnTokenIsZero = earnTokenIsZeroMap[key.currency0][key.currency1];
     bool exactIn = params.amountSpecified < 0;
 
     uint256 inputAmount;
     uint256 outputAmount;
-    // Case 1: ExactIn (RawToken) -> PlusPlusToken
-    if ((rawTokenIsZero == params.zeroForOne) && exactIn) {
-      Currency input = rawTokenIsZero ? key.currency0 : key.currency1;
-      Currency output = rawTokenIsZero ? key.currency1 : key.currency0;
+    // Case 1: ExactIn (earnToken) -> PlusPlusToken
+    if ((earnTokenIsZero == params.zeroForOne) && exactIn) {
+      Currency input = earnTokenIsZero ? key.currency0 : key.currency1;
+      Currency output = earnTokenIsZero ? key.currency1 : key.currency0;
       inputAmount = uint256(-params.amountSpecified);
 
-      // Take the RawToken input
+      // Take the earnToken input
       input.take(poolManager, address(this), inputAmount, false);
 
-      // Deposit the RawToken input to generate PlusPlusToken output amount
-      outputAmount = IPlusPlusToken(Currency.unwrap(output)).deposit(address(this), inputAmount);
+      // Deposit the earnToken input to generate PlusPlusToken output amount
+      outputAmount = IPlusPlusToken(Currency.unwrap(output)).earnDeposit(inputAmount);
 
       // Tell pool manager to take PlusPlusToken from the hook
       output.settle(poolManager, address(this), outputAmount, false);
       return
         (BaseHook.beforeSwap.selector, toBeforeSwapDelta(int128(int256(inputAmount)), int128(-int256(outputAmount))), 0);
-      // Case 2: ExactOut (RawToken) -> PlusPlusToken
-    } else if ((rawTokenIsZero == params.zeroForOne) && !exactIn) {
-      Currency input = rawTokenIsZero ? key.currency0 : key.currency1;
-      Currency output = rawTokenIsZero ? key.currency1 : key.currency0;
+      // Case 2: ExactOut (earnToken) -> PlusPlusToken
+    } else if ((earnTokenIsZero == params.zeroForOne) && !exactIn) {
+      Currency input = earnTokenIsZero ? key.currency0 : key.currency1;
+      Currency output = earnTokenIsZero ? key.currency1 : key.currency0;
       outputAmount = uint256(params.amountSpecified);
       inputAmount = outputAmount;
 
-      // Take the RawToken input
+      // Take the earnToken input
       input.take(poolManager, address(this), inputAmount, false);
 
       // Mint the PlusPlusToken output
-      IPlusPlusToken(Currency.unwrap(output)).deposit(address(this), inputAmount);
+      IPlusPlusToken(Currency.unwrap(output)).earnDeposit(inputAmount);
 
       // Tell pool manager to take PlusPlusToken from the hook
       output.settle(poolManager, address(this), outputAmount, false);
@@ -140,38 +140,38 @@ contract PlusPlusWrapperHook is BaseHook {
       return
         (BaseHook.beforeSwap.selector, toBeforeSwapDelta(int128(-int256(outputAmount)), int128(int256(inputAmount))), 0);
 
-      // Case 3: ExactIn (PlusPlusToken) -> RawToken
-    } else if ((rawTokenIsZero != params.zeroForOne) && exactIn) {
-      Currency input = rawTokenIsZero ? key.currency1 : key.currency0;
-      Currency output = rawTokenIsZero ? key.currency0 : key.currency1;
+      // Case 3: ExactIn (PlusPlusToken) -> earnToken
+    } else if ((earnTokenIsZero != params.zeroForOne) && exactIn) {
+      Currency input = earnTokenIsZero ? key.currency1 : key.currency0;
+      Currency output = earnTokenIsZero ? key.currency0 : key.currency1;
       inputAmount = uint256(-params.amountSpecified);
 
       // Take the PlusPlusToken input
       input.take(poolManager, address(this), inputAmount, false);
 
-      // Burn the PlusPlusToken input to generate RawToken
-      outputAmount = IPlusPlusToken(Currency.unwrap(input)).withdraw(address(this), inputAmount);
+      // Burn the PlusPlusToken input to generate earnToken
+      outputAmount = IPlusPlusToken(Currency.unwrap(input)).earnWithdraw(inputAmount);
 
-      // Tell pool manager to take RawToken from the hook
+      // Tell pool manager to take earnToken from the hook
       output.settle(poolManager, address(this), outputAmount, false);
 
       return
         (BaseHook.beforeSwap.selector, toBeforeSwapDelta(int128(int256(inputAmount)), int128(-int256(outputAmount))), 0);
 
-      // Case 4: ExactOut (PlusPlusToken) -> RawToken
-    } else if ((rawTokenIsZero != params.zeroForOne) && !exactIn) {
-      Currency input = rawTokenIsZero ? key.currency1 : key.currency0;
-      Currency output = rawTokenIsZero ? key.currency0 : key.currency1;
+      // Case 4: ExactOut (PlusPlusToken) -> earnToken
+    } else if ((earnTokenIsZero != params.zeroForOne) && !exactIn) {
+      Currency input = earnTokenIsZero ? key.currency1 : key.currency0;
+      Currency output = earnTokenIsZero ? key.currency0 : key.currency1;
       outputAmount = uint256(params.amountSpecified);
       inputAmount = outputAmount;
 
       // Take the PlusPlusToken input
       input.take(poolManager, address(this), inputAmount, false);
 
-      // Burn the PlusPlusToken input to generate RawToken
-      outputAmount = IPlusPlusToken(Currency.unwrap(input)).withdraw(address(this), outputAmount);
+      // Burn the PlusPlusToken input to generate earnToken
+      outputAmount = IPlusPlusToken(Currency.unwrap(input)).earnWithdraw(outputAmount);
 
-      // Tell pool manager to take RawToken from the hook
+      // Tell pool manager to take earnToken from the hook
       output.settle(poolManager, address(this), outputAmount, false);
 
       return

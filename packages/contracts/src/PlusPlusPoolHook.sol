@@ -33,6 +33,7 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
     address to;
     PoolKey key;
     IPoolManager.ModifyLiquidityParams params;
+    bool rawOrEarn;
   }
 
   error UnsupportedTokenPair();
@@ -68,27 +69,29 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
 
     // Check if currency0 is a PlusPlusToken
     (bool success, bytes memory data) =
-      Currency.unwrap(key.currency0).staticcall(abi.encodeWithSelector(IPlusPlusToken.rawToken.selector));
+      Currency.unwrap(key.currency0).staticcall(abi.encodeWithSelector(IPlusPlusToken.rawAndEarnToken.selector));
 
     if (success && data.length >= 32) {
       currency0IsPlusPlus = true;
       isPlusPlusToken[key.currency0] = true;
 
-      // Pre-approve the raw token to get deposited into the PlusPlusToken
-      address rawTokenAddress = abi.decode(data, (address));
+      // Pre-approve the raw and earn tokens to get deposited into the PlusPlusToken
+      (address rawTokenAddress, address earnTokenAddress) = abi.decode(data, (address, address));
       IERC20(rawTokenAddress).approve(Currency.unwrap(key.currency0), type(uint256).max);
+      IERC20(earnTokenAddress).approve(Currency.unwrap(key.currency0), type(uint256).max);
     }
     // Check if currency1 is a PlusPlusToken
     (success, data) =
-      Currency.unwrap(key.currency1).staticcall(abi.encodeWithSelector(IPlusPlusToken.rawToken.selector));
+      Currency.unwrap(key.currency1).staticcall(abi.encodeWithSelector(IPlusPlusToken.rawAndEarnToken.selector));
 
     if (success && data.length >= 32) {
       currency1IsPlusPlus = true;
       isPlusPlusToken[key.currency1] = true;
 
-      // Pre-approve the raw token to get deposited into the PlusPlusToken
-      address rawTokenAddress = abi.decode(data, (address));
+      // Pre-approve the raw and earn tokens to get deposited into the PlusPlusToken
+      (address rawTokenAddress, address earnTokenAddress) = abi.decode(data, (address, address));
       IERC20(rawTokenAddress).approve(Currency.unwrap(key.currency1), type(uint256).max);
+      IERC20(earnTokenAddress).approve(Currency.unwrap(key.currency1), type(uint256).max);
     }
 
     // If neither token is a PlusPlusToken, revert
@@ -107,8 +110,16 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
     revert UnsupportedLiquidityOperation();
   }
 
-  function modifyLiquidity(PoolKey calldata key, IPoolManager.ModifyLiquidityParams calldata params) external {
-    poolManager.unlock(abi.encode(CallbackData({to: msg.sender, key: key, params: params})));
+  /**
+   * @notice Modify liquidity for a PlusPlusToken
+   * @param key The pool key
+   * @param params The modify liquidity params
+   * @param rawOrEarn If true, the raw token is used when depositing liquidity, otherwise the earn token is used. Ignored if withdrawing liquidity.
+   */
+  function modifyLiquidity(PoolKey calldata key, IPoolManager.ModifyLiquidityParams calldata params, bool rawOrEarn)
+    external
+  {
+    poolManager.unlock(abi.encode(CallbackData({to: msg.sender, key: key, params: params, rawOrEarn: rawOrEarn})));
   }
 
   function unlockCallback(bytes calldata data) external returns (bytes memory) {
@@ -116,7 +127,7 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
     address to = callbackData.to;
     PoolKey memory key = callbackData.key;
     IPoolManager.ModifyLiquidityParams memory params = callbackData.params;
-
+    bool rawOrEarn = callbackData.rawOrEarn;
     (BalanceDelta callerDelta, BalanceDelta feesAccrued) = poolManager.modifyLiquidity(key, params, "");
 
     int128 amount0 = callerDelta.amount0() + feesAccrued.amount0();
@@ -127,21 +138,28 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
       uint256 amount0ToAdd = (-amount0).toUint128();
       // If currency0 is a PlusPlusToken, we need to pull the rawToken and wrap it
       if (isPlusPlusToken[key.currency0]) {
-        IERC20 rawToken = IERC20(IPlusPlusToken(Currency.unwrap(key.currency0)).rawToken());
-        rawToken.safeTransferFrom(to, address(this), amount0ToAdd);
-        IPlusPlusToken(Currency.unwrap(key.currency0)).deposit(address(this), amount0ToAdd);
+        if (rawOrEarn) {
+          IERC20 rawToken = IERC20(IPlusPlusToken(Currency.unwrap(key.currency0)).rawToken());
+          rawToken.safeTransferFrom(to, address(this), amount0ToAdd);
+          IPlusPlusToken(Currency.unwrap(key.currency0)).rawDeposit(amount0ToAdd);
+        } else {
+          IERC20 earnToken = IERC20(IPlusPlusToken(Currency.unwrap(key.currency0)).earnToken());
+          earnToken.safeTransferFrom(to, address(this), amount0ToAdd);
+          IPlusPlusToken(Currency.unwrap(key.currency0)).earnDeposit(amount0ToAdd);
+        }
       } else {
         IERC20(Currency.unwrap(key.currency0)).safeTransferFrom(to, address(this), amount0ToAdd);
       }
       key.currency0.settle(poolManager, address(this), amount0ToAdd, false);
     } else if (amount0 > 0) {
       uint256 amount0ToRemove = amount0.toUint128();
-      // If currency0 is a PlusPlusToken, we need to take it and unwrap it into a rawToken
+      // If currency0 is a PlusPlusToken, we need to take it and burn it
       key.currency0.take(poolManager, address(this), amount0ToRemove, false);
       if (isPlusPlusToken[key.currency0]) {
-        IPlusPlusToken(Currency.unwrap(key.currency0)).withdraw(address(this), amount0ToRemove);
-        IERC20 rawToken = IERC20(IPlusPlusToken(Currency.unwrap(key.currency0)).rawToken());
-        rawToken.safeTransfer(to, amount0ToRemove);
+        (uint256 rawAmount, uint256 earnAmount) = IPlusPlusToken(Currency.unwrap(key.currency0)).burn(amount0ToRemove);
+        (address rawToken, address earnToken) = IPlusPlusToken(Currency.unwrap(key.currency0)).rawAndEarnToken();
+        IERC20(rawToken).safeTransfer(to, rawAmount);
+        IERC20(earnToken).safeTransfer(to, earnAmount);
       } else {
         IERC20(Currency.unwrap(key.currency0)).safeTransfer(to, amount0ToRemove);
       }
@@ -152,9 +170,15 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
       uint256 amount1ToAdd = (-amount1).toUint128();
       // If currency1 is a PlusPlusToken, we need to pull the rawToken and wrap it
       if (isPlusPlusToken[key.currency1]) {
-        IERC20 rawToken = IERC20(IPlusPlusToken(Currency.unwrap(key.currency1)).rawToken());
-        rawToken.safeTransferFrom(to, address(this), amount1ToAdd);
-        IPlusPlusToken(Currency.unwrap(key.currency1)).deposit(address(this), amount1ToAdd);
+        if (rawOrEarn) {
+          IERC20 rawToken = IERC20(IPlusPlusToken(Currency.unwrap(key.currency1)).rawToken());
+          rawToken.safeTransferFrom(to, address(this), amount1ToAdd);
+          IPlusPlusToken(Currency.unwrap(key.currency1)).rawDeposit(amount1ToAdd);
+        } else {
+          IERC20 earnToken = IERC20(IPlusPlusToken(Currency.unwrap(key.currency1)).earnToken());
+          earnToken.safeTransferFrom(to, address(this), amount1ToAdd);
+          IPlusPlusToken(Currency.unwrap(key.currency1)).earnDeposit(amount1ToAdd);
+        }
       } else {
         IERC20(Currency.unwrap(key.currency1)).safeTransferFrom(to, address(this), amount1ToAdd);
       }
@@ -164,9 +188,10 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
       // If currency0 is a PlusPlusToken, we need to take it and unwrap it into a rawToken
       key.currency1.take(poolManager, address(this), amount1ToRemove, false);
       if (isPlusPlusToken[key.currency1]) {
-        IPlusPlusToken(Currency.unwrap(key.currency1)).withdraw(address(this), amount1ToRemove);
-        IERC20 rawToken = IERC20(IPlusPlusToken(Currency.unwrap(key.currency1)).rawToken());
-        rawToken.safeTransfer(to, amount1ToRemove);
+        (uint256 rawAmount, uint256 earnAmount) = IPlusPlusToken(Currency.unwrap(key.currency1)).burn(amount1ToRemove);
+        (address rawToken, address earnToken) = IPlusPlusToken(Currency.unwrap(key.currency1)).rawAndEarnToken();
+        IERC20(rawToken).safeTransfer(to, rawAmount);
+        IERC20(earnToken).safeTransfer(to, earnAmount);
       } else {
         IERC20(Currency.unwrap(key.currency1)).safeTransfer(to, amount1ToRemove);
       }
