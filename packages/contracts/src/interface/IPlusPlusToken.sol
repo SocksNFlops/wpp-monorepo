@@ -15,12 +15,31 @@ interface IPlusPlusToken is IERC20 {
   }
 
   /**
+   * @notice The error raised when the renouncement of a role is attempted
+   */
+  error RoleRenouncementDisabled();
+
+  /**
+   * @notice The error raised when a non-whitelisted recipient attempts to hold PlusPlus tokens
+   * @param recipient The address of the recipient that is not whitelisted
+   */
+  error NotWhitelisted(address recipient);
+
+  /**
+   * @notice The event emitted when the whitelist is updated
+   * @param recipient The address of the recipient that is being updated
+   * @param status The new status of the recipient
+   */
+  event WhitelistUpdated(address indexed recipient, bool status);
+
+  /**
    * @dev Initializes the contract
    * @param rawToken_ The address of the raw token
    * @param earningToken_ The address of the earning token
    * @param targetRatio_ The target ratio of raw token to earning token principle (in basis points)
+   * @param admin_ The address of the admin
    */
-  function initialize(address rawToken_, address earningToken_, uint16 targetRatio_) external;
+  function initialize(address rawToken_, address earningToken_, uint16 targetRatio_, address admin_) external;
 
   /**
    * @return The address of the raw token
@@ -70,4 +89,18 @@ interface IPlusPlusToken is IERC20 {
    * @return totalPoints The amount of total points
    */
   function totalPoints() external view returns (uint256 totalPoints);
+
+  /**
+   * @notice Updates the whitelist of recipients allowed to hold PlusPlus tokens
+   * @param recipient The address of the recipient to update
+   * @param status Whether the recipient is whitelisted
+   */
+  function updateWhitelist(address recipient, bool status) external;
+
+  /**
+   * @notice Returns whether a recipient is whitelisted to hold PlusPlus tokens
+   * @param recipient The address of the recipient to check
+   * @return isWhitelisted Whether the recipient is whitelisted
+   */
+  function isWhitelisted(address recipient) external view returns (bool isWhitelisted);
 }

@@ -46,6 +46,8 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
   int24 tickLower;
   int24 tickUpper;
 
+  address plusPlusAdmin = makeAddr("plusPlusAdmin");
+
   function setUp() public {
     // creates the pool manager, utility routers, and test tokens
     deployFreshManagerAndRouters();
@@ -98,7 +100,12 @@ contract PlusPlusWrapperHookTest is Test, Fixtures {
 
   function helper_makePlusPlusToken(address rawToken, address earnToken, uint16 targetRatio) public returns (address) {
     PlusPlusToken token = new PlusPlusToken();
-    token.initialize(rawToken, earnToken, targetRatio);
+    token.initialize(rawToken, earnToken, targetRatio, plusPlusAdmin);
+    vm.startPrank(plusPlusAdmin);
+    token.updateWhitelist(address(this), true);
+    token.updateWhitelist(address(hook), true);
+    token.updateWhitelist(address(manager), true);
+    vm.stopPrank();
     return address(token);
   }
 

@@ -8,12 +8,18 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IPlusPlusToken} from "./interface/IPlusPlusToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
-// ToDo: Handle decimals
-// ToDo: Whitelist of recipients
 // ToDo: Rewrite points to use shares rather than raw deposit amounts
 // ToDo: Separate tokenHolder and points-earner
-contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
+contract PlusPlusToken is
+  ERC20Upgradeable,
+  EIP712Upgradeable,
+  UUPSUpgradeable,
+  AccessControlUpgradeable,
+  IPlusPlusToken
+{
   using SafeERC20 for IERC20;
 
   /**
@@ -29,6 +35,7 @@ contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
     uint16 _targetRatio;
     TokenStake _lastTotalStake;
     mapping(address => TokenStake) _tokenStakes;
+    mapping(address => bool) _whitelist;
   }
 
   // ToDo: Validate this hash
@@ -43,12 +50,26 @@ contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
   }
 
   /**
+   * @dev Authorizes the upgrade of the contract. Only the admin can authorize the upgrade.
+   * @param newImplementation The address of the new implementation.
+   */
+  function _authorizeUpgrade(address newImplementation) internal virtual override onlyRole(DEFAULT_ADMIN_ROLE) {}
+
+  /**
+   * @dev This function is disabled to prevent the renouncement of roles
+   */
+  function renounceRole(bytes32, address) public virtual override {
+    revert RoleRenouncementDisabled();
+  }
+
+  /**
+   * /**
    * @dev Sets the values for {name} and {symbol}.
    *
    * All two of these values are immutable: they can only be set once during
    * construction.
    */
-  function __PlusPlusToken_init(address rawToken_, address earningToken_, uint16 targetRatio_)
+  function __PlusPlusToken_init(address rawToken_, address earningToken_, uint16 targetRatio_, address admin_)
     internal
     onlyInitializing
   {
@@ -56,7 +77,9 @@ contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
     string memory symbol = string.concat(IERC20Metadata(rawToken_).symbol(), "++");
     __ERC20_init(name, symbol);
     __EIP712_init("PlusPlusToken", "1");
+    __AccessControl_init();
     __PlusPlusToken_init_unchained(rawToken_, earningToken_, targetRatio_);
+    _grantRole(DEFAULT_ADMIN_ROLE, admin_);
   }
 
   function __PlusPlusToken_init_unchained(address rawToken_, address earningToken_, uint16 targetRatio_)
@@ -72,8 +95,15 @@ contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
   /**
    * @inheritdoc IPlusPlusToken
    */
-  function initialize(address rawToken_, address earningToken_, uint16 targetRatio_) public initializer {
-    __PlusPlusToken_init(rawToken_, earningToken_, targetRatio_);
+  function initialize(address rawToken_, address earningToken_, uint16 targetRatio_, address admin_) public initializer {
+    __PlusPlusToken_init(rawToken_, earningToken_, targetRatio_, admin_);
+  }
+
+  /**
+   * @inheritdoc IERC20Metadata
+   */
+  function decimals() public view override returns (uint8) {
+    return IERC20Metadata(_getPlusPlusTokenStorage()._rawToken).decimals();
   }
 
   /**
@@ -189,5 +219,44 @@ contract PlusPlusToken is ERC20Upgradeable, EIP712Upgradeable, IPlusPlusToken {
 
     // Calculate total points
     return $._lastTotalStake.accruedPoints + (uint256(block.timestamp) - $._lastTotalStake.timestamp) * totalSupply();
+  }
+
+  /**
+   * @inheritdoc IPlusPlusToken
+   */
+  function updateWhitelist(address recipient, bool status) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    // Fetch storage
+    PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
+
+    // Update the whitelist
+    $._whitelist[recipient] = status;
+
+    // Emit the whitelist updated event
+    emit WhitelistUpdated(recipient, status);
+  }
+
+  /**
+   * @inheritdoc IPlusPlusToken
+   */
+  function isWhitelisted(address recipient) external view returns (bool) {
+    // Fetch storage
+    PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
+
+    // Return the whitelist
+    return $._whitelist[recipient];
+  }
+
+  /**
+   * @dev Overrides the ERC20Upgradeable `_update` function to revert if the recipient is not whitelisted
+   * @inheritdoc ERC20Upgradeable
+   */
+  function _update(address from, address to, uint256 value) internal override {
+    // Revert if the recipient is not whitelisted
+    if (to != address(0) && !this.isWhitelisted(to)) {
+      revert NotWhitelisted(to);
+    }
+
+    // Update the balance
+    super._update(from, to, value);
   }
 }

@@ -11,6 +11,7 @@ contract PlusPlusTokenTest is Test {
   IERC20 public rawToken;
   IERC20 public earningToken;
   uint16 public targetRatio = 5_000;
+  address public admin = makeAddr("admin");
 
   function setUp() public {
     // Set up raw and earning tokens
@@ -19,20 +20,29 @@ contract PlusPlusTokenTest is Test {
 
     // Initialize plusplus token
     plusplusToken = new PlusPlusToken();
-    plusplusToken.initialize(address(rawToken), address(earningToken), targetRatio);
+    plusplusToken.initialize(address(rawToken), address(earningToken), targetRatio, admin);
+
+    // Whitelist this contract as a recipient
+    vm.prank(admin);
+    plusplusToken.updateWhitelist(address(this), true);
   }
 
-  function test_Initialize() public {
+  function test_initialize() public view {
     assertEq(plusplusToken.rawToken(), address(rawToken));
     assertEq(plusplusToken.earningToken(), address(earningToken));
     assertEq(plusplusToken.targetRatio(), targetRatio);
     assertEq(plusplusToken.lastTotalStake().accruedPoints, 0);
     assertEq(plusplusToken.lastTotalStake().timestamp, 0);
+    assertTrue(plusplusToken.hasRole(plusplusToken.DEFAULT_ADMIN_ROLE(), admin));
   }
 
   function test_deposit(address account, uint128 depositAmount) public {
     // Ensure that the account is not the zero address
     vm.assume(account != address(0));
+
+    // Add account to whitelist for this test
+    vm.prank(admin);
+    plusplusToken.updateWhitelist(account, true);
 
     // Deal tokens to test
     deal(address(rawToken), address(this), depositAmount);
@@ -52,6 +62,10 @@ contract PlusPlusTokenTest is Test {
   function test_points(address account, uint128 depositAmount, uint32 timeElapsed) public {
     // Ensure that the account is not the zero address
     vm.assume(account != address(0));
+
+    // Add account to whitelist for this test
+    vm.prank(admin);
+    plusplusToken.updateWhitelist(account, true);
 
     // Deal tokens to test
     deal(address(rawToken), address(this), depositAmount);
@@ -78,6 +92,11 @@ contract PlusPlusTokenTest is Test {
     // Ensure that the account is not the zero address
     vm.assume(account != address(0));
 
+    // Add account to whitelist for this test
+    vm.prank(admin);
+    plusplusToken.updateWhitelist(account, true);
+
+    // Ensure that the withdraw amount is less than the deposit amount
     // Ensure that the withdraw amount is less than the deposit amount
     depositAmount = uint128(bound(depositAmount, 1, type(uint128).max));
     withdrawAmount = uint128(bound(withdrawAmount, 0, depositAmount));
