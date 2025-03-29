@@ -84,8 +84,16 @@ contract PlusPlusTokenTest is Test {
     skip(timeElapsed);
 
     // Validate that the points are correct
-    assertEq(plusplusToken.points(account), uint256(timeElapsed) * depositAmount * plusplusToken.POINTS_PRECISION(), "Points of account are not correct");
-    assertEq(plusplusToken.totalPoints(), uint256(timeElapsed) * depositAmount * plusplusToken.POINTS_PRECISION(), "Total points are not correct");
+    assertEq(
+      plusplusToken.points(account),
+      uint256(timeElapsed) * depositAmount * plusplusToken.POINTS_PRECISION(),
+      "Points of account are not correct"
+    );
+    assertEq(
+      plusplusToken.totalPoints(),
+      uint256(timeElapsed) * depositAmount * plusplusToken.POINTS_PRECISION(),
+      "Total points are not correct"
+    );
   }
 
   function test_withdraw(address account, uint128 depositAmount, uint128 withdrawAmount, uint32 timeElapsed) public {
@@ -133,7 +141,15 @@ contract PlusPlusTokenTest is Test {
     );
 
     // Validate that the points are correct
-    assertEq(plusplusToken.points(account), uint256(timeElapsed) * (uint256(depositAmount) * plusplusToken.POINTS_PRECISION()), "Points of account are not correct");
-    assertEq(plusplusToken.totalPoints(), uint256(timeElapsed) * (uint256(depositAmount) * plusplusToken.POINTS_PRECISION()), "Total points are not correct");
+    assertEq(
+      plusplusToken.points(account),
+      uint256(timeElapsed) * (uint256(depositAmount) * plusplusToken.POINTS_PRECISION()),
+      "Points of account are not correct"
+    );
+    assertEq(
+      plusplusToken.totalPoints(),
+      uint256(timeElapsed) * (uint256(depositAmount) * plusplusToken.POINTS_PRECISION()),
+      "Total points are not correct"
+    );
   }
 }

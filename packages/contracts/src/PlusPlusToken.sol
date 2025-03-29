@@ -12,7 +12,6 @@ import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/acce
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-// ToDo: Rewrite points to use shares rather than raw deposit amounts
 // ToDo: Separate tokenHolder and points-earner
 contract PlusPlusToken is
   ERC20Upgradeable,
@@ -232,7 +231,8 @@ contract PlusPlusToken is
     PlusPlusTokenStorage storage $ = _getPlusPlusTokenStorage();
 
     // Calculate total points
-    return $._lastTotalStake.accruedPoints + (uint256(block.timestamp) - $._lastTotalStake.timestamp) * $._lastTotalStake.shares;
+    return $._lastTotalStake.accruedPoints
+      + (uint256(block.timestamp) - $._lastTotalStake.timestamp) * $._lastTotalStake.shares;
   }
 
   /**
