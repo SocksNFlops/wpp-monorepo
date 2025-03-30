@@ -43,7 +43,7 @@ contract PlusPlusPoolHook is BaseHook, IUnlockCallback, ERC6909 {
 
   constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
 
-  function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+  function getHookPermissions() public pure virtual override returns (Hooks.Permissions memory) {
     return Hooks.Permissions({
       beforeInitialize: true, // Need to disable invalid pairs from being created
       afterInitialize: false,

@@ -20,9 +20,6 @@ contract PlusPlusToken is
 {
   using SafeERC20 for IERC20;
 
-  // Access control roles
-  bytes32 public constant DEPOSIT_WITHDRAW_ROLE = keccak256("DEPOSIT_WITHDRAW_ROLE");
-
   /**
    * @custom:storage-location erc7201:plusplus.storage.plusplus
    * @param _rawToken The address of the raw token
